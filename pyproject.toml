@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astrolaue"
+version = "0.1.0"
+description = "小型ラウエ画像復元パイプライン (AstroLaue)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "opencv-python>=4.8.0",
+    "scikit-image>=0.21.0",
+    "matplotlib>=3.7.0",
+    "mss>=9.0.0",
+    "Pillow>=9.5.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4.0",
+]
+
+[project.scripts]
+astrolaue = "astrolaue.main:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
