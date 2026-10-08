@@ -100,8 +100,10 @@ class ResidentWatcher:
                 shift = result.physics_report.mean_centroid_shift_px
                 print(f"  * 光量保存比 (Flux): {flux:.3f} (理論値: 1.000)")
                 print(f"  * 重心シフト      : {shift:.2f} px")
-            print(f"  * 出力先 (最新)   : {self.output_dir.resolve() / 'restored_transparent.png'}")
-            print(f"  * 出力先 (履歴)   : {self.history_dir.resolve() / f'{hist_prefix}.png'}")
+            latest_path = result.transparent_png_path or (self.output_dir.resolve() / "restored_transparent.png")
+            print(f"  * 出力先 (最新)   : {latest_path}")
+            if result.history_png_path:
+                print(f"  * 出力先 (履歴)   : {result.history_png_path.resolve()}")
             print("-" * 60)
 
             # 成功通知音 (Windows)
