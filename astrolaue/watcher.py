@@ -114,8 +114,13 @@ class ResidentWatcher:
             return True
 
         except Exception as ex:
-            logger.error("キャプチャ＆復元中にエラーが発生しました: %s", ex, exc_info=True)
+            import traceback
+            tb_str = traceback.format_exc()
+            logger.error("キャプチャ＆復元中にエラーが発生しました: %s\n%s", ex, tb_str)
             print(f"\n[ERROR] 復元処理に失敗しました: {ex}")
+            tb_lines = [l for l in tb_str.strip().splitlines() if l.strip()]
+            if len(tb_lines) > 1:
+                print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}")
             self._notify_sound(success=False)
             print("\n>>> 待機中... (F9 キー または Enter で再試行) <<<")
             return False

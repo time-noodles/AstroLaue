@@ -391,20 +391,42 @@ class AstroLauePipeline:
 
         if cfg.save_intermediates:
             csv_path = cfg.output_dir / "detected_spots.csv"
-            with open(csv_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    "spot_id", "x", "y", "r_px", "theta_deg",
-                    "peak_intensity", "integrated_intensity",
-                    "fwhm_before_px", "fwhm_after_px", "fwhm_reduction_percent", "sigma"
-                ])
-                for s in spots:
+            try:
+                with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
                     writer.writerow([
-                        s.spot_id, f"{s.x:.2f}", f"{s.y:.2f}", f"{s.r:.2f}", f"{s.theta_deg:.2f}",
-                        f"{s.peak_intensity:.4f}", f"{s.integrated_intensity:.4f}",
-                        f"{s.fwhm_before:.2f}", f"{s.fwhm_after:.2f}", f"{s.fwhm_reduction_ratio:.1f}",
-                        f"{s.sigma:.2f}"
+                        "spot_id", "x", "y", "r_px", "theta_deg",
+                        "peak_intensity", "integrated_intensity",
+                        "fwhm_before_px", "fwhm_after_px", "fwhm_reduction_percent", "sigma"
                     ])
+                    for s in spots:
+                        writer.writerow([
+                            s.spot_id, f"{s.x:.2f}", f"{s.y:.2f}", f"{s.r:.2f}", f"{s.theta_deg:.2f}",
+                            f"{s.peak_intensity:.4f}", f"{s.integrated_intensity:.4f}",
+                            f"{s.fwhm_before:.2f}", f"{s.fwhm_after:.2f}", f"{s.fwhm_reduction_ratio:.1f}",
+                            f"{s.sigma:.2f}"
+                        ])
+            except PermissionError as pe:
+                logger.warning("detected_spots.csv が別アプリ(Excel等)で開かれているため上書きできませんでした: %s", pe)
+                alt_csv = cfg.output_dir / f"detected_spots_{time.strftime('%H%M%S')}.csv"
+                try:
+                    with open(alt_csv, "w", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        writer.writerow([
+                            "spot_id", "x", "y", "r_px", "theta_deg",
+                            "peak_intensity", "integrated_intensity",
+                            "fwhm_before_px", "fwhm_after_px", "fwhm_reduction_percent", "sigma"
+                        ])
+                        for s in spots:
+                            writer.writerow([
+                                s.spot_id, f"{s.x:.2f}", f"{s.y:.2f}", f"{s.r:.2f}", f"{s.theta_deg:.2f}",
+                                f"{s.peak_intensity:.4f}", f"{s.integrated_intensity:.4f}",
+                                f"{s.fwhm_before:.2f}", f"{s.fwhm_after:.2f}", f"{s.fwhm_reduction_ratio:.1f}",
+                                f"{s.sigma:.2f}"
+                            ])
+                    csv_path = alt_csv
+                except Exception:
+                    pass
 
             def to_u8(arr: np.ndarray, use_asinh_stretch: bool = False) -> np.ndarray:
                 arr_f = np.maximum(arr.astype(np.float32), 0.0)

@@ -18,9 +18,28 @@ import matplotlib.patches as patches
 import numpy as np
 from astropy.visualization import AsinhStretch
 
+import time
 from astrolaue.analyze import SpotResult
 
 logger = logging.getLogger(__name__)
+
+
+def safe_savefig(fig: plt.Figure, save_path: str | Path, **kwargs) -> Path:
+    """Windows でファイルがビューアで開かれていてもクラッシュしない安全な保存関数."""
+    p = Path(save_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fig.savefig(str(p), **kwargs)
+        return p
+    except PermissionError as pe:
+        logger.warning("画像が別アプリで開かれているため上書きできませんでした (%s): %s", p, pe)
+        alt_p = p.with_name(f"{p.stem}_{time.strftime('%H%M%S')}{p.suffix}")
+        try:
+            fig.savefig(str(alt_p), **kwargs)
+            logger.info("代替ファイル名として保存しました: %s", alt_p)
+            return alt_p
+        except Exception:
+            return p
 
 
 def plot_diagnostic_figure(
@@ -192,9 +211,7 @@ def plot_diagnostic_figure(
     ax5.tick_params(colors="#888888")
 
     if save_path is not None:
-        p = Path(save_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(str(p), dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+        safe_savefig(fig, p, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         logger.info("診断プロット図を保存しました: %s", p)
 
     return fig
@@ -295,8 +312,7 @@ def plot_batch_summary_figure(
 
     plt.tight_layout(rect=[0, 0, 1, 0.98])
     out_p = Path(output_path)
-    out_p.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(out_p), dpi=140, facecolor=fig.get_facecolor())
+    safe_savefig(fig, out_p, dpi=140, facecolor=fig.get_facecolor())
     plt.close(fig)
     logger.info("バッチ比較一覧図を保存しました: %s", out_p)
     return out_p
@@ -430,7 +446,7 @@ def plot_comparison_figure(
     fig.suptitle(header_text, color="#ffffff", fontsize=13, fontweight="bold", y=0.98)
 
     plt.tight_layout(rect=[0, 0.02, 1, 0.94])
-    fig.savefig(str(out_p), dpi=160, facecolor=fig.get_facecolor())
+    safe_savefig(fig, out_p, dpi=160, facecolor=fig.get_facecolor())
     plt.close(fig)
     logger.info("ビフォーアフター検証比較画像を保存しました: %s", out_p)
     return out_p

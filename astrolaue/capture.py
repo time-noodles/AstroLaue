@@ -202,14 +202,19 @@ def _get_foreground_window_win32() -> Optional[Dict[str, Any]]:
     w = rect.right - rect.left
     h = rect.bottom - rect.top
 
-    # コンソール自身（cmd, powershell, terminal, python等）か判定
-    console_keywords = ["cmd.exe", "powershell", "terminal", "astrolaue", "python"]
-    is_console = any(k in title.lower() for k in console_keywords)
+    # キャプチャ対象から除外すべきウィンドウ (コンソール、エディタ、エクスプローラー、フォト等)
+    ignore_keywords = [
+        "cmd.exe", "powershell", "terminal", "astrolaue", "python",
+        "visual studio", "code", "results_live", "results", "history",
+        "explorer", "フォト", "photos", "restored_transparent",
+    ]
+    is_ignorable = any(k in title.lower() for k in ignore_keywords)
 
     return {
         "hwnd": hwnd,
         "title": title,
-        "is_console": is_console,
+        "is_console": is_ignorable,
+        "is_ignorable": is_ignorable,
         "left": rect.left,
         "top": rect.top,
         "width": w,
@@ -294,8 +299,8 @@ def capture_window(
                     "width": fg["width"],
                     "height": fg["height"],
                 }
-            elif fg and fg["is_console"]:
-                logger.info("コンソールウィンドウがアクティブなため、デスクトップ画面全体をキャプチャします")
+            elif fg and fg["is_ignorable"]:
+                logger.info("手前のウィンドウ ('%s') はコンソール/フォルダ/ビューアのため除外し、画面全体から回折像を探索します", fg["title"])
         except Exception as ex:
             logger.debug("アクティブウィンドウ情報取得エラー: %s", ex)
 
