@@ -18,6 +18,7 @@ import matplotlib.patches as patches
 import numpy as np
 from astropy.visualization import AsinhStretch
 
+import os
 import time
 from astrolaue.analyze import SpotResult
 
@@ -25,21 +26,30 @@ logger = logging.getLogger(__name__)
 
 
 def safe_savefig(fig: plt.Figure, save_path: str | Path, **kwargs) -> Path:
-    """Windows でファイルがビューアで開かれていてもクラッシュしない安全な保存関数."""
-    p = Path(save_path)
+    """Windows でファイルがビューアで開かれていてもクラッシュせず、更新日時を確実に最新化する関数."""
+    p = Path(save_path).resolve()
     p.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fig.savefig(str(p), **kwargs)
-        return p
-    except PermissionError as pe:
-        logger.warning("画像が別アプリで開かれているため上書きできませんでした (%s): %s", p, pe)
-        alt_p = p.with_name(f"{p.stem}_{time.strftime('%H%M%S')}{p.suffix}")
+    for attempt in range(3):
         try:
-            fig.savefig(str(alt_p), **kwargs)
-            logger.info("代替ファイル名として保存しました: %s", alt_p)
-            return alt_p
-        except Exception:
+            fig.savefig(str(p), **kwargs)
+            try:
+                os.utime(p, None)
+            except Exception:
+                pass
             return p
+        except PermissionError as pe:
+            if attempt < 2:
+                time.sleep(0.15 * (attempt + 1))
+            else:
+                logger.warning("画像が別アプリで開かれているため上書きできませんでした (%s): %s", p.name, pe)
+                alt_p = p.with_name(f"{p.stem}_{time.strftime('%H%M%S')}{p.suffix}")
+                try:
+                    fig.savefig(str(alt_p), **kwargs)
+                    os.utime(alt_p, None)
+                    logger.info("代替ファイル名として保存しました: %s", alt_p.name)
+                    return alt_p
+                except Exception:
+                    return p
 
 
 def plot_diagnostic_figure(

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Tuple, Optional, Literal
 
 import cv2
+import os
 import time
 import numpy as np
 from astropy.visualization import AsinhStretch
@@ -19,31 +20,85 @@ from astropy.visualization import AsinhStretch
 logger = logging.getLogger(__name__)
 
 
-def safe_imwrite(path: str | Path, img: np.ndarray) -> bool:
-    """Windows/Linux 対応の安全な画像保存関数 (Unicodeパス対応 & ロック検知・フォールバック)."""
-    p = Path(path)
+def safe_imwrite(path: str | Path, img: np.ndarray, max_retries: int = 5) -> bool:
+    """Windows/Linux 対応の安全・確実な画像保存関数.
+
+    - Unicode/日本語パス完全対応
+    - 一時ファイル書き込み + os.replace によるアトミック置換 (Windowsのオープンロックを安全に突破)
+    - エクスプローラーのサムネイルロックに対応するリトライループ
+    - os.utime によるファイル更新日時の現在時刻への強制反映 (NTFSトンネリング対策)
+    """
+    p = Path(path).resolve()
     p.parent.mkdir(parents=True, exist_ok=True)
+
+    ext = p.suffix.lower() or ".png"
+    success, encoded = cv2.imencode(ext, img)
+    if not success:
+        return bool(cv2.imwrite(str(p), img))
+
+    data = encoded.tobytes()
+
+    # 1. 一時ファイルに先行書き込み (既存ファイルのロックを回避)
+    tmp_path = p.with_name(f".tmp_{p.stem}_{os.getpid()}_{time.time_ns()}{p.suffix}")
     try:
-        ext = p.suffix.lower() or ".png"
-        success, encoded = cv2.imencode(ext, img)
-        if success:
-            p.write_bytes(encoded.tobytes())
-            return True
-    except PermissionError as pe:
-        msg = f"[!] 警告: '{p.name}' がWindowsの画像ビューア(フォト等)で開かれてロックされています。"
-        print(f"\n{msg}\n    ※ 上書きするには画像ビューアを閉じてください。代替名で保存します。")
-        logger.warning("%s: %s", msg, pe)
+        tmp_path.write_bytes(data)
+    except Exception as e:
+        logger.debug("一時ファイル書き込み例外 (%s): %s。直接上書きを試行します。", tmp_path.name, e)
+        ret = bool(cv2.imwrite(str(p), img))
         try:
-            alt_path = p.with_name(f"{p.stem}_{time.strftime('%H%M%S')}{p.suffix}")
-            alt_path.write_bytes(encoded.tobytes())
-            logger.info("代替ファイル名として保存しました: %s", alt_path)
-            return True
+            os.utime(p, None)
         except Exception:
             pass
-    except Exception as ex:
-        logger.debug("imencode 書き込み失敗、標準 imwrite を試行: %s", ex)
+        return ret
 
-    return bool(cv2.imwrite(str(p), img))
+    # 2. os.replace によるアトミック置換 (エクスプローラー等の一時ロックに備えてリトライ)
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            os.replace(tmp_path, p)
+            # 更新日時 (mtime) を現在時刻に強制セット (エクスプローラーの更新日時を確実に最新化)
+            try:
+                os.utime(p, None)
+            except Exception:
+                pass
+            return True
+        except PermissionError as pe:
+            last_err = pe
+            time.sleep(0.12 * (attempt + 1))
+        except Exception as ex:
+            last_err = ex
+            break
+
+    # 3. 置換失敗時: 直接上書きをフォールバック試行
+    try:
+        p.write_bytes(data)
+        try:
+            os.utime(p, None)
+        except Exception:
+            pass
+        tmp_path.unlink(missing_ok=True)
+        return True
+    except PermissionError:
+        pass
+    except Exception:
+        pass
+
+    # 4. どうしてもロックされて上書きできない場合 (フォトアプリ等が完全排他ロック中)
+    alt_name = f"{p.stem}_{time.strftime('%H%M%S')}{p.suffix}"
+    alt_path = p.with_name(alt_name)
+    try:
+        os.replace(tmp_path, alt_path)
+        try:
+            os.utime(alt_path, None)
+        except Exception:
+            pass
+        msg = f"[!] 警告: '{p.name}' がWindows(フォトやビューア)にロックされているため、最新画像を '{alt_name}' として保存しました。"
+        print(f"\n{msg}\n    ※ 上書きするには画像ビューアを閉じてください。")
+        logger.warning("%s: %s", msg, last_err)
+        return True
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        return bool(cv2.imwrite(str(p), img))
 
 
 def create_circular_mask(
