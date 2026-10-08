@@ -109,11 +109,16 @@ class ResidentWatcher:
                 shift = result.physics_report.mean_centroid_shift_px
                 print(f"  * 光量保存比 (Flux): {flux:.3f} (理論値: 1.000)")
                 print(f"  * 重心シフト      : {shift:.2f} px")
-            latest_path = result.transparent_png_path or (self.output_dir.resolve() / "restored_transparent.png")
             print(f"  * 保存先フォルダ  : {self.output_dir.resolve()}")
-            print(f"  * 出力先 (最新)   : {latest_path.resolve()}")
+            print("  * 直下の最新成果物一覧:")
+            if self.output_dir.exists():
+                direct_files = [f for f in self.output_dir.iterdir() if f.is_file()]
+                for df in sorted(direct_files):
+                    mtime_str = datetime.datetime.fromtimestamp(df.stat().st_mtime).strftime("%H:%M:%S")
+                    size_kb = df.stat().st_size / 1024.0
+                    print(f"    - {df.name:<34} (更新: {mtime_str}, {size_kb:6.1f} KB)")
             if result.history_png_path:
-                print(f"  * 出力先 (履歴)   : {result.history_png_path.resolve()}")
+                print(f"  * 履歴永続保存    : {result.history_png_path.resolve()}")
             print("-" * 60)
 
             # 成功通知音 (Windows)

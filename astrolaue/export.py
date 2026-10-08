@@ -30,7 +30,9 @@ def safe_imwrite(path: str | Path, img: np.ndarray) -> bool:
             p.write_bytes(encoded.tobytes())
             return True
     except PermissionError as pe:
-        logger.warning("ファイルが別アプリケーションで開かれているため上書きできませんでした (%s): %s", p, pe)
+        msg = f"[!] 警告: '{p.name}' がWindowsの画像ビューア(フォト等)で開かれてロックされています。"
+        print(f"\n{msg}\n    ※ 上書きするには画像ビューアを閉じてください。代替名で保存します。")
+        logger.warning("%s: %s", msg, pe)
         try:
             alt_path = p.with_name(f"{p.stem}_{time.strftime('%H%M%S')}{p.suffix}")
             alt_path.write_bytes(encoded.tobytes())
