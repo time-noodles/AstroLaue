@@ -7,4 +7,4 @@
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GIT_DIR_PATH="${HOME}/.git_repos/AstroLaue.git"
 
-GIT_DIR="${GIT_DIR_PATH}" GIT_WORK_TREE="${PROJECT_DIR}" exec git "$@"
+GIT_DIR="${GIT_DIR_PATH}" GIT_WORK_TREE="${PROJECT_DIR}" GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -i ${HOME}/.ssh/id_ed25519}" exec git "$@"
