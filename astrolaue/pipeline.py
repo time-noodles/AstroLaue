@@ -127,6 +127,17 @@ class AstroLauePipeline:
         cfg = self.config
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
+        # 出力ディレクトリ直下の既存成果物 (PNG, CSV等) を自動クリーンアップ (history/ は保護)
+        try:
+            for item in cfg.output_dir.iterdir():
+                if item.is_file() and item.suffix.lower() in [".png", ".csv", ".jpg"]:
+                    try:
+                        item.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception as e_clean:
+            logger.debug("出力ディレクトリの事前クリーンアップ中に例外: %s", e_clean)
+
         # ステップ 1: 入力画像取得
         if live:
             logger.info("ライブキャプチャを実行中 (タイトル指定: %s, モード: %s)...", window_title, target_mode)

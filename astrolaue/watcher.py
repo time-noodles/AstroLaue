@@ -74,6 +74,15 @@ class ResidentWatcher:
             print(f"[*] キャプチャ＆復元を開始します ({now_str})")
             print("=" * 60)
 
+            # 出力ディレクトリ直下の古いファイルを初期化クリーンアップ (history/ は保護)
+            if self.output_dir.exists():
+                for f in self.output_dir.iterdir():
+                    if f.is_file() and f.suffix.lower() in [".png", ".csv", ".jpg"]:
+                        try:
+                            f.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+
             # 1. 画面またはアクティブウィンドウからキャプチャ
             print("[1/3] 画面を取得中...")
             frame = capture_window(

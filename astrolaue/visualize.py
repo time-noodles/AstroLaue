@@ -211,6 +211,7 @@ def plot_diagnostic_figure(
     ax5.tick_params(colors="#888888")
 
     if save_path is not None:
+        p = Path(save_path)
         safe_savefig(fig, p, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
         logger.info("診断プロット図を保存しました: %s", p)
 
