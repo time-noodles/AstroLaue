@@ -147,6 +147,10 @@ def main(args: list[str] | None = None) -> int:
     )
     logger = logging.getLogger("astrolaue")
 
+    # ライブまたは常駐モードの場合、未指定時の出力先を results_live に自動切り替え
+    if (parsed.watch or parsed.live) and parsed.output == "./results":
+        parsed.output = "./results_live"
+
     config = PipelineConfig(
         output_dir=Path(parsed.output),
         num_iter=parsed.iter,

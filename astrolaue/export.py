@@ -12,10 +12,36 @@ from pathlib import Path
 from typing import Tuple, Optional, Literal
 
 import cv2
+import time
 import numpy as np
 from astropy.visualization import AsinhStretch
 
 logger = logging.getLogger(__name__)
+
+
+def safe_imwrite(path: str | Path, img: np.ndarray) -> bool:
+    """Windows/Linux 対応の安全な画像保存関数 (Unicodeパス対応 & ロック検知・フォールバック)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        ext = p.suffix.lower() or ".png"
+        success, encoded = cv2.imencode(ext, img)
+        if success:
+            p.write_bytes(encoded.tobytes())
+            return True
+    except PermissionError as pe:
+        logger.warning("ファイルが別アプリケーションで開かれているため上書きできませんでした (%s): %s", p, pe)
+        try:
+            alt_path = p.with_name(f"{p.stem}_{time.strftime('%H%M%S')}{p.suffix}")
+            alt_path.write_bytes(encoded.tobytes())
+            logger.info("代替ファイル名として保存しました: %s", alt_path)
+            return True
+        except Exception:
+            pass
+    except Exception as ex:
+        logger.debug("imencode 書き込み失敗、標準 imwrite を試行: %s", ex)
+
+    return bool(cv2.imwrite(str(p), img))
 
 
 def create_circular_mask(
@@ -230,16 +256,16 @@ def export_publication_rgba(
         logger.info("余白をカットしてタイトクロップしました: サイズ=%dx%d", side, side)
 
     # 書き出し
-    cv2.imwrite(str(out_p), bgra)
+    safe_imwrite(out_p, bgra)
     logger.info("学術提出用透過PNGを保存しました: %s (サイズ=%dx%d)", out_p, bgra.shape[1], bgra.shape[0])
 
     if export_16bit and bgra_16 is not None:
         out_16 = out_p.with_name(f"{out_p.stem}_16bit.png")
-        cv2.imwrite(str(out_16), bgra_16)
+        safe_imwrite(out_16, bgra_16)
         logger.info("16-bit透過PNGを保存しました: %s", out_16)
 
     out_inv = out_p.with_name(f"{out_p.stem}_inverted.png")
-    cv2.imwrite(str(out_inv), bgra_inv)
+    safe_imwrite(out_inv, bgra_inv)
 
     return out_p
 
@@ -313,7 +339,7 @@ def export_contrast_optimized_image(
     opt_canvas[dists <= r_inner] = 1.0
 
     gray_u8 = (np.clip(opt_canvas, 0.0, 1.0) * 255.0).astype(np.uint8)
-    cv2.imwrite(str(out_p), gray_u8)
+    safe_imwrite(out_p, gray_u8)
     logger.info("コントラスト最適化グレースケール画像を保存しました: %s", out_p)
 
     pseudo_path = None
@@ -331,7 +357,7 @@ def export_contrast_optimized_image(
 
         bgr_u8 = (np.clip(rgba[..., ::-1], 0.0, 1.0) * 255.0).astype(np.uint8)
         pseudo_path = out_p.with_name(f"{out_p.stem}_pseudo.png")
-        cv2.imwrite(str(pseudo_path), bgr_u8)
+        safe_imwrite(pseudo_path, bgr_u8)
         logger.info("コントラスト最適化擬似カラー画像を保存しました: %s", pseudo_path)
 
     return out_p, pseudo_path
@@ -378,7 +404,7 @@ def export_linear_image(
     canvas[dists <= r_inner] = 1.0
 
     gray_u8 = (canvas * 255.0).astype(np.uint8)
-    cv2.imwrite(str(out_p), gray_u8)
+    safe_imwrite(out_p, gray_u8)
     logger.info("元画像準拠線形復元画像を保存しました: %s", out_p)
     return out_p
 

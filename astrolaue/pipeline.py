@@ -36,6 +36,7 @@ from astrolaue.export import (
     export_contrast_optimized_image,
     export_linear_image,
     export_three_way_comparison,
+    safe_imwrite,
 )
 from astrolaue.clipboard import copy_image_to_clipboard
 
@@ -424,10 +425,10 @@ class AstroLauePipeline:
                     scaled = (arr_f / mx * 255.0)
                 return np.clip(scaled, 0, 255).astype(np.uint8)
 
-            cv2.imwrite(str(cfg.output_dir / "cropped_roi.png"), cropped_roi)
-            cv2.imwrite(str(cfg.output_dir / "normalized_canvas.png"), norm_img)
-            cv2.imwrite(str(cfg.output_dir / "bg_removed.png"), to_u8(bg_subtracted))
-            cv2.imwrite(str(cfg.output_dir / "polar_before.png"), to_u8(polar_before))
+            safe_imwrite(cfg.output_dir / "cropped_roi.png", cropped_roi)
+            safe_imwrite(cfg.output_dir / "normalized_canvas.png", norm_img)
+            safe_imwrite(cfg.output_dir / "bg_removed.png", to_u8(bg_subtracted))
+            safe_imwrite(cfg.output_dir / "polar_before.png", to_u8(polar_before))
             # タイトクロップされた直交復元画像の保存 (余白ゼロ化 & asinh微弱ピーク強調)
             crop_r = int(round(norm_r_outer * 1.06))
             xc_i, yc_i = int(round(norm_center[0])), int(round(norm_center[1]))
@@ -437,10 +438,10 @@ class AstroLauePipeline:
             y2 = min(cfg.output_size, yc_i + crop_r)
             side = min(x2 - x1, y2 - y1)
             restored_tight = restored_cart[y1 : y1 + side, x1 : x1 + side]
-            cv2.imwrite(str(cfg.output_dir / "restored_cartesian.png"), to_u8(restored_tight, use_asinh_stretch=cfg.export_asinh))
+            safe_imwrite(cfg.output_dir / "restored_cartesian.png", to_u8(restored_tight, use_asinh_stretch=cfg.export_asinh))
 
             if residual_polar is not None:
-                cv2.imwrite(str(cfg.output_dir / "residual_polar.png"), to_u8(residual_polar))
+                safe_imwrite(cfg.output_dir / "residual_polar.png", to_u8(residual_polar))
 
         # ステップ 13: ビフォーアフター検証比較画像の保存
         comparison_png_path = None
