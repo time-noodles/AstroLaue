@@ -15,8 +15,19 @@ import cv2
 import numpy as np
 from scipy import optimize
 from skimage.feature import blob_log
-from photutils.detection import DAOStarFinder
-from astropy.stats import mad_std
+try:
+    from photutils.detection import DAOStarFinder
+    HAVE_PHOTUTILS = True
+except ImportError:
+    DAOStarFinder = None
+    HAVE_PHOTUTILS = False
+
+try:
+    from astropy.stats import mad_std
+except ImportError:
+    def mad_std(data: np.ndarray, axis: Optional[int] = None) -> float | np.ndarray:  # type: ignore
+        med = np.median(data, axis=axis)
+        return float(1.4826 * np.median(np.abs(data - med), axis=axis))
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +101,7 @@ def detect_spots(
 
     # 1. 天体標準 photutils.detection.DAOStarFinder による高精度点光源同定
     # ラウエスポットは方位角方向にアーク状に延伸しているため、真円前提 (-1.0~1.0) を緩和して検出
-    if method == "daofind":
+    if method == "daofind" and HAVE_PHOTUTILS and DAOStarFinder is not None:
         try:
             expected_fwhm = max(float(min_sigma * 2.355), 3.0)
             daofind = DAOStarFinder(
