@@ -22,19 +22,23 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
-
-import cv2
-import numpy as np
+from typing import Optional, Literal
+import shutil
 
 from astrolaue.capture import capture_window
 from astrolaue.pipeline import AstroLauePipeline, PipelineConfig
+from astrolaue.alignment import (
+    LaueAlignmentConfig,
+    solve_laue_alignment,
+    plot_alignment_diagnostics,
+)
+from astrolaue.clipboard import copy_image_to_clipboard, copy_text_to_clipboard
 
 logger = logging.getLogger(__name__)
 
 
 class ResidentWatcher:
-    """ホットキー監視による常駐キャプチャ＆復元マネージャー."""
+    """ホットキー監視による常駐キャプチャ＆復元・結晶方位アライメントマネージャー."""
 
     def __init__(
         self,
@@ -44,6 +48,12 @@ class ResidentWatcher:
         monitor_index: int = 1,
         target_mode: str = "auto",
         hotkey_name: str = "F9",
+        camera_length_mm: float = 40.0,
+        pixel_size_mm: float = 0.05,
+        stage_order: Literal["XY", "YX"] = "XY",
+        sign_x: int = 1,
+        sign_y: int = 1,
+        alignment_config: Optional[LaueAlignmentConfig] = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.config = config or PipelineConfig(output_dir=self.output_dir)
@@ -57,6 +67,15 @@ class ResidentWatcher:
         self._running = False
         self._is_processing = False
         self._lock = threading.Lock()
+
+        # 結晶方位アライメント設定
+        self.alignment_config = alignment_config or LaueAlignmentConfig(
+            camera_length_mm=camera_length_mm,
+            pixel_size_mm=pixel_size_mm,
+            stage_order=stage_order,
+            sign_x=sign_x,
+            sign_y=sign_y,
+        )
 
         # 出力ディレクトリ作成
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -124,7 +143,7 @@ class ResidentWatcher:
             # 成功通知音 (Windows)
             self._notify_sound(success=True)
 
-            print("\n>>> 次の測定を待機中... (F9 キー または Enter で実行, 'q' で終了) <<<")
+            print("\n>>> 次の操作を待機中... ([Enter]: 復元, [A]: 角度アライメント, [Q]: 終了) <<<")
             return True
 
         except Exception as ex:
@@ -136,14 +155,100 @@ class ResidentWatcher:
             if len(tb_lines) > 1:
                 print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}")
             self._notify_sound(success=False)
-            print("\n>>> 待機中... (F9 キー または Enter で再試行) <<<")
+            print("\n>>> 待機中... ([Enter]: 復元, [A]: 角度アライメント) <<<")
+            return False
+
+        finally:
+            self._lock.release()
+
+    def trigger_crystal_alignment(self) -> bool:
+        """画面キャプチャから結晶主軸自動同定＆2軸ゴニオ補正角推定を高速実行します."""
+        if not self._lock.acquire(blocking=False):
+            print("\n[!] 前回の処理が実行中です。完了をお待ちください...")
+            return False
+
+        try:
+            print("\n" + "=" * 60)
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"[*] 結晶方位アライメントを開始します ({now_str})")
+            print(f"    (カメラ長 L={self.alignment_config.camera_length_mm:.1f} mm, ステージ={self.alignment_config.stage_order})")
+            print("=" * 60)
+
+            # 1. 画面またはアクティブウィンドウからキャプチャ
+            print("[1/2] 画面を取得中...")
+            frame = capture_window(
+                window_title_pattern=self.window_title,
+                monitor_index=self.monitor_index,
+                target_mode=self.target_mode,
+            )
+
+            # 2. アライメント計算実行 (背景減算・ピーク抽出・グノモン直線探索・交点推定)
+            print("[2/2] スポット抽出 & グノモン晶帯解析実行中...")
+            t0 = time.perf_counter()
+            res = solve_laue_alignment(frame, config=self.alignment_config)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+            # 3. 診断図の出力・保存
+            diag_live_path = self.output_dir / "laue_alignment_live.png"
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            diag_history_path = self.history_dir / f"laue_alignment_{timestamp}.png"
+
+            plot_alignment_diagnostics(res, save_path=diag_live_path, show=False)
+            try:
+                shutil.copy(diag_live_path, diag_history_path)
+            except Exception:
+                pass
+
+            # クリップボードへコピー (画像およびテキスト)
+            copy_image_to_clipboard(diag_live_path)
+            angle_text = f"Δθx={res.delta_theta_x_deg:+.2f}°, Δθy={res.delta_theta_y_deg:+.2f}° (Total tilt: {res.total_tilt_deg:.2f}°)"
+            copy_text_to_clipboard(angle_text)
+
+            # 4. コンソール結果サマリー表示
+            print("-" * 60)
+            print("【結晶方位アライメント結果】")
+            print(f"  * 処理時間             : {elapsed_ms:.1f} ms")
+            print(f"  * 検出スポット数       : {len(res.spots_xy_mm)} 個")
+            print(f"  * 抽出された主要晶帯   : {len(res.zones)} 本")
+            for z in res.zones[:4]:
+                print(f"      - 晶帯 #{z.line_id}: インライア={z.num_inliers}点, スコア={z.score:.2f}")
+            print(f"  * 推定 (001) 主軸座標  : 検出器 (X={res.best_candidate.detector_x_mm:+.2f}, Y={res.best_candidate.detector_y_mm:+.2f}) mm")
+            print(f"  * 中心軸からの全傾き角 : ψ = {res.total_tilt_deg:.2f}°")
+            print("  * 【推奨ゴニオ補正角】 :")
+            print(f"      >>> Δθx (X軸回転) = {res.delta_theta_x_deg:+.2f}°")
+            print(f"      >>> Δθy (Y軸回転) = {res.delta_theta_y_deg:+.2f}°")
+            if len(res.candidates) > 1:
+                print("  * 代替主軸候補:")
+                for c in res.candidates[1:3]:
+                    print(f"      - 第{c.rank}候補: Δθx={c.delta_theta_x_deg:+.2f}°, Δθy={c.delta_theta_y_deg:+.2f}°, スコア={c.score:.2f}")
+            print(f"  * 診断図保存           : {diag_live_path.resolve()}")
+            print(f"  * 履歴永続保存         : {diag_history_path.resolve()}")
+            print(f"  * クリップボード       : 診断図 & 補正角テキストを転送完了")
+            print("-" * 60)
+
+            # 成功通知音
+            self._notify_sound(success=True)
+
+            print("\n>>> 次の操作を待機中... ([Enter]: 復元, [A]: 角度アライメント, [Q]: 終了) <<<")
+            return True
+
+        except Exception as ex:
+            import traceback
+            tb_str = traceback.format_exc()
+            logger.error("アライメント実行中にエラーが発生しました: %s\n%s", ex, tb_str)
+            print(f"\n[ERROR] アライメント処理に失敗しました: {ex}")
+            tb_lines = [l for l in tb_str.strip().splitlines() if l.strip()]
+            if len(tb_lines) > 1:
+                print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}")
+            self._notify_sound(success=False)
+            print("\n>>> 待機中... ([Enter]: 復元, [A]: 角度アライメント) <<<")
             return False
 
         finally:
             self._lock.release()
 
     def _notify_sound(self, success: bool = True) -> None:
-        """復元完了をビープ音で通知します."""
+        """処理完了をビープ音で通知します."""
         if sys.platform == "win32":
             try:
                 import winsound
@@ -161,6 +266,20 @@ class ResidentWatcher:
         # フォールバック
         print("\a", end="", flush=True)
 
+    def _print_help(self) -> None:
+        """キー操作ヘルプを表示します."""
+        print("\n" + "=" * 65)
+        print("  【AstroLaue コマンド操作一覧】")
+        print("    [Enter]       : キャプチャ & 画像復元 (デブラー) 実行")
+        print("    [A] + [Enter] : キャプチャ & 結晶主軸アライメント (角度推定) 実行 ★高速")
+        print("    [F9]          : (Windows) グローバルホットキー: 画像復元")
+        print("    [F10]         : (Windows) グローバルホットキー: 結晶主軸アライメント")
+        print("    [Ctrl+Shift+L]: (Windows) 代替ホットキー: 画像復元")
+        print("    [Ctrl+Shift+A]: (Windows) 代替ホットキー: 結晶主軸アライメント")
+        print("    [H] + [Enter] : このヘルプを表示")
+        print("    [Q] + [Enter] : 常駐監視を終了")
+        print("=" * 65 + "\n")
+
     def run(self) -> None:
         """常駐監視ループを開始します."""
         self._running = True
@@ -169,17 +288,20 @@ class ResidentWatcher:
         print("  AstroLaue: 常駐ホットキー監視モード (Resident Watcher)")
         print("=" * 65)
         print("  【トリガー操作】")
-        print("    [F9]               : 現在の画面から即座にキャプチャ＆復元")
-        print("    [Ctrl+Shift+L]     : 代替ホットキー (F9が使えない場合)")
-        print("    [Enter] (コンソール): 手動トリガー")
+        print("    [Enter] (コンソール): キャプチャ & 画像復元 (デブラー) 実行")
+        print("    [A] + [Enter]      : キャプチャ & 結晶主軸アライメント (角度推定) 実行 ★高速")
+        print("    [F9]  (Windows)    : グローバルホットキー: 画像復元")
+        print("    [F10] (Windows)    : グローバルホットキー: 結晶主軸アライメント")
+        print("    [Ctrl+Shift+L]     : 代替ホットキー: 画像復元")
+        print("    [Ctrl+Shift+A]     : 代替ホットキー: 結晶主軸アライメント")
         print("    [Q] + [Enter]      : 終了")
         print("  -------------------------------------------------------------")
         print("  * 特定のアプリに依存しません。")
         print("  * 測定ソフト、画像ビューア、ブラウザ等を画面に表示した状態で")
-        print("    ホットキーを押すだけで自動復元されます。")
-        print("  * 復元結果は results_live/ および results_live/history/ に自動保存されます。")
+        print("    ホットキーまたはコマンドキーを押すだけで即座に解析されます。")
+        print("  * 復元結果およびアライメント診断図は results_live/ に自動保存されます。")
         print("=" * 65)
-        print("\n待機中... (F9 キー または Enter を押してください)\n")
+        print("\n待機中... ([Enter]: 復元, [A]: 角度アライメント, [Q]: 終了)\n")
 
         # Windowsの場合はctypesによるグローバルホットキー監視スレッドを起動
         hotkey_thread = None
@@ -190,13 +312,19 @@ class ResidentWatcher:
         # メインスレッドではコンソール入力を待機
         try:
             while self._running:
-                line = input()
-                if line.strip().lower() in ("q", "quit", "exit"):
+                raw = input()
+                line = raw.strip().lower()
+                if line in ("q", "quit", "exit"):
                     print("[*] 終了コマンドを受け付けました。常駐監視を終了します。")
                     self._running = False
                     break
+                elif line in ("a", "align", "alignment", "gonio", "axis", "c"):
+                    # 結晶主軸アライメントを実行
+                    self.trigger_crystal_alignment()
+                elif line in ("h", "help", "?"):
+                    self._print_help()
                 else:
-                    # Enter押下で即時実行
+                    # Enter押下で即時復元実行
                     self.trigger_capture_and_restore()
         except (KeyboardInterrupt, EOFError):
             print("\n[*] 常駐監視を終了します。")
@@ -214,29 +342,38 @@ class ResidentWatcher:
         MOD_SHIFT = 0x0004
         MOD_NOREPEAT = 0x4000
         VK_F9 = 0x78
+        VK_F10 = 0x79
         VK_L = 0x4C
+        VK_A = 0x41
 
         HOTKEY_ID_F9 = 101
         HOTKEY_ID_CTRL_SHIFT_L = 102
+        HOTKEY_ID_F10 = 103
+        HOTKEY_ID_CTRL_SHIFT_A = 104
 
         # ホットキー登録
-        # 1. 単キー F9
+        # 1. 復元用: F9 および Ctrl + Shift + L
         res1 = user32.RegisterHotKey(None, HOTKEY_ID_F9, MOD_NOREPEAT, VK_F9)
         if not res1:
             res1 = user32.RegisterHotKey(None, HOTKEY_ID_F9, 0, VK_F9)
 
-        # 2. Ctrl + Shift + L
         res2 = user32.RegisterHotKey(
             None, HOTKEY_ID_CTRL_SHIFT_L, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_L
         )
 
-        if res1:
-            logger.info("グローバルホットキー [F9] を正常に登録しました")
-        else:
-            logger.warning("[F9] のホットキー登録に失敗しました (別アプリが占有している可能性があります)")
+        # 2. アライメント用: F10 および Ctrl + Shift + A
+        res3 = user32.RegisterHotKey(None, HOTKEY_ID_F10, MOD_NOREPEAT, VK_F10)
+        if not res3:
+            res3 = user32.RegisterHotKey(None, HOTKEY_ID_F10, 0, VK_F10)
 
-        if res2:
-            logger.info("グローバルホットキー [Ctrl + Shift + L] を正常に登録しました")
+        res4 = user32.RegisterHotKey(
+            None, HOTKEY_ID_CTRL_SHIFT_A, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_A
+        )
+
+        if res1 or res2:
+            logger.info("復元用グローバルホットキー [F9 / Ctrl+Shift+L] を登録しました")
+        if res3 or res4:
+            logger.info("アライメント用グローバルホットキー [F10 / Ctrl+Shift+A] を登録しました")
 
         WM_HOTKEY = 0x0312
         msg = wintypes.MSG()
@@ -247,14 +384,18 @@ class ResidentWatcher:
                 PM_REMOVE = 0x0001
                 if user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
                     if msg.message == WM_HOTKEY:
-                        # ホットキー押下
                         hk_id = msg.wParam
                         if hk_id in (HOTKEY_ID_F9, HOTKEY_ID_CTRL_SHIFT_L):
-                            # 別スレッドで実行してメッセージループをブロックしない
-                            exec_thread = threading.Thread(
+                            # 別スレッドで復元を実行
+                            threading.Thread(
                                 target=self.trigger_capture_and_restore, daemon=True
-                            )
-                            exec_thread.start()
+                            ).start()
+                        elif hk_id in (HOTKEY_ID_F10, HOTKEY_ID_CTRL_SHIFT_A):
+                            # 別スレッドで結晶アライメントを実行
+                            threading.Thread(
+                                target=self.trigger_crystal_alignment, daemon=True
+                            ).start()
+
                     user32.TranslateMessage(ctypes.byref(msg))
                     user32.DispatchMessageW(ctypes.byref(msg))
                 else:
@@ -262,4 +403,6 @@ class ResidentWatcher:
         finally:
             user32.UnregisterHotKey(None, HOTKEY_ID_F9)
             user32.UnregisterHotKey(None, HOTKEY_ID_CTRL_SHIFT_L)
+            user32.UnregisterHotKey(None, HOTKEY_ID_F10)
+            user32.UnregisterHotKey(None, HOTKEY_ID_CTRL_SHIFT_A)
             logger.info("グローバルホットキーの登録を解除しました")

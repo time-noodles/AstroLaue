@@ -174,3 +174,83 @@ def _copy_to_macos_clipboard(path: Path) -> bool:
         return True
     except Exception:
         return False
+
+
+def copy_text_to_clipboard(text: str) -> bool:
+    """指定された文字列を OS のクリップボードにコピーします.
+
+    Args:
+        text: コピーする文字列
+
+    Returns:
+        bool: コピーに成功した場合 True, 失敗した場合 False
+    """
+    if not text:
+        return False
+
+    os_name = platform.system()
+    try:
+        if os_name == "Windows":
+            import ctypes
+            from ctypes import wintypes
+
+            CF_UNICODETEXT = 13
+            GMEM_MOVEABLE = 0x0002
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+
+            encoded = text.encode("utf-16le") + b"\x00\x00"
+            h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+            if not h_mem:
+                return False
+            ptr = kernel32.GlobalLock(h_mem)
+            if not ptr:
+                kernel32.GlobalFree(h_mem)
+                return False
+            ctypes.memmove(ptr, encoded, len(encoded))
+            kernel32.GlobalUnlock(h_mem)
+
+            if not user32.OpenClipboard(None):
+                kernel32.GlobalFree(h_mem)
+                return False
+            try:
+                user32.EmptyClipboard()
+                user32.SetClipboardData(CF_UNICODETEXT, h_mem)
+                return True
+            finally:
+                user32.CloseClipboard()
+
+        elif os_name == "Linux":
+            # wl-copy (Wayland)
+            res = subprocess.run(["which", "wl-copy"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            if res.returncode == 0:
+                p = subprocess.Popen(["wl-copy"], stdin=subprocess.PIPE)
+                p.communicate(text.encode("utf-8"))
+                return True
+
+            # xclip (X11)
+            res = subprocess.run(["which", "xclip"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            if res.returncode == 0:
+                p = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+                p.communicate(text.encode("utf-8"))
+                return True
+
+            # xsel (X11 fallback)
+            res = subprocess.run(["which", "xsel"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            if res.returncode == 0:
+                p = subprocess.Popen(["xsel", "--clipboard", "--input"], stdin=subprocess.PIPE)
+                p.communicate(text.encode("utf-8"))
+                return True
+            return False
+
+        elif os_name == "Darwin":
+            p = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+            p.communicate(text.encode("utf-8"))
+            return True
+
+    except Exception as e:
+        logger.debug("クリップボードテキストコピー失敗: %s", e)
+        return False
+
+    return False

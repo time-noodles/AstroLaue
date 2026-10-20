@@ -129,6 +129,43 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="キャプチャ対象モニタ番号 (デフォルト: 1=プライマリモニタ, 0=全マルチ画面)",
     )
     parser.add_argument(
+        "--align",
+        action="store_true",
+        help="結晶方位アライメントモード (主要晶帯軸 (001) の自動同定と2軸ゴニオ補正角を推定)",
+    )
+    parser.add_argument(
+        "--camera-length", "-L",
+        type=float,
+        default=40.0,
+        help="試料―検出器間距離 L [mm] (アライメント用、デフォルト: 40.0)",
+    )
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        default=0.05,
+        help="検出器ピクセルサイズ [mm/pix] (アライメント用、デフォルト: 0.05)",
+    )
+    parser.add_argument(
+        "--stage-order",
+        choices=["XY", "YX"],
+        default="XY",
+        help="ゴニオメーターステージ軸順序 ('XY': 下X上Y, 'YX': 下Y上X) (デフォルト: XY)",
+    )
+    parser.add_argument(
+        "--sign-x",
+        type=int,
+        choices=[1, -1],
+        default=1,
+        help="X軸回転の符号係数 (デフォルト: 1)",
+    )
+    parser.add_argument(
+        "--sign-y",
+        type=int,
+        choices=[1, -1],
+        default=1,
+        help="Y軸回転の符号係数 (デフォルト: 1)",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -165,7 +202,69 @@ def main(args: list[str] | None = None) -> int:
         export_transparent=parsed.export_transparent,
     )
 
-    pipeline = AstroLauePipeline(config)
+    # 0. 結晶方位アライメントモード
+    if parsed.align:
+        from astrolaue.alignment import (
+            LaueAlignmentConfig,
+            solve_laue_alignment,
+            plot_alignment_diagnostics,
+            generate_synthetic_laue_sample,
+        )
+        align_cfg = LaueAlignmentConfig(
+            camera_length_mm=parsed.camera_length,
+            pixel_size_mm=parsed.pixel_size,
+            stage_order=parsed.stage_order,
+            sign_x=parsed.sign_x,
+            sign_y=parsed.sign_y,
+        )
+        out_dir = Path(parsed.output)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        diag_path = out_dir / "laue_alignment_diagnostic.png"
+
+        print("=" * 75)
+        print("  AstroLaue: 結晶方位アライメント (晶帯軸 (001) 自動同定 & ゴニオ補正角推定)")
+        print("=" * 75)
+        print(f"・カメラ長 L: {align_cfg.camera_length_mm:.1f} mm")
+        print(f"・ピクセルサイズ: {align_cfg.pixel_size_mm:.4f} mm/pix")
+        print(f"・ステージ構成: {align_cfg.stage_order} (sign_x={align_cfg.sign_x}, sign_y={align_cfg.sign_y})")
+
+        if parsed.input:
+            input_path = Path(parsed.input)
+            print(f"・解析対象画像: {input_path.resolve()}")
+            res = solve_laue_alignment(input_path, config=align_cfg)
+        else:
+            print("・入力画像未指定のため、合成正方晶シミュレーションを実行します。")
+            spots_xy, intens, meta = generate_synthetic_laue_sample(
+                true_tilt_x_deg=6.0,
+                true_tilt_y_deg=-4.5,
+                camera_length_mm=align_cfg.camera_length_mm,
+                lattice_type="tetragonal",
+            )
+            res = solve_laue_alignment(spots_xy, intensities=intens, config=align_cfg)
+
+        best = res.best_candidate
+        print("\n" + "=" * 75)
+        print(" 【主軸同定 & ゴニオ補正角 推定結果】")
+        print("=" * 75)
+        print(f"検出スポット数: {len(res.spots_xy_mm)} 点")
+        print(f"同定主要晶帯数: {len(res.zones)} 本")
+        for z in res.zones:
+            print(f"  - Zone #{z.line_id}: a={z.a:+.3f}, b={z.b:+.3f}, c={z.c:+.3f} | Score={z.score:5.1f} | Inliers={z.num_inliers:2d}")
+
+        print(f"\n同定された主軸 (001) 候補 (上位 {len(res.candidates)} 件):")
+        for c in res.candidates:
+            print(f"  [第{c.rank}候補] グノモン(u, v)=({c.u:+.4f}, {c.v:+.4f}) | 検出器(X, Y)=({c.detector_x_mm:+.2f}, {c.detector_y_mm:+.2f}) mm")
+            print(f"             補正角: Δθx = {c.delta_theta_x_deg:+.3f}°,  Δθy = {c.delta_theta_y_deg:+.3f}° (全傾き={c.total_tilt_deg:.2f}°) | 信頼度={c.score:6.1f}")
+
+        print("-" * 75)
+        print(f"★ 推奨ゴニオメーター補正回転角:  Δθx = {best.delta_theta_x_deg:+.3f}°,  Δθy = {best.delta_theta_y_deg:+.3f}°")
+        print(f"★ 現在の結晶主軸傾き角 ψ:       {best.total_tilt_deg:.3f}°")
+        print(f"★ 解析処理時間:                 {res.elapsed_ms:.1f} ms")
+        print("=" * 75)
+
+        plot_alignment_diagnostics(res, save_path=diag_path, show=False)
+        print(f"アライメント診断図を保存しました: {diag_path.resolve()}\n")
+        return 0
 
     # 1. 常駐ホットキー監視モード
     if parsed.watch:
@@ -177,6 +276,11 @@ def main(args: list[str] | None = None) -> int:
             window_title=parsed.window_title,
             monitor_index=parsed.monitor,
             target_mode=parsed.target_mode,
+            camera_length_mm=getattr(parsed, "camera_length", 40.0),
+            pixel_size_mm=getattr(parsed, "pixel_size", 0.05),
+            stage_order=getattr(parsed, "stage_order", "XY"),
+            sign_x=getattr(parsed, "sign_x", 1),
+            sign_y=getattr(parsed, "sign_y", 1),
         )
         watcher.run()
         return 0

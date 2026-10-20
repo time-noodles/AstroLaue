@@ -47,15 +47,11 @@ venv.bak/
 
 # Pipeline and benchmark output directories
 results/
+results_live/
 results_batch/
 results_test/
 results_benchmark/
 history/
 
 # Scratch temporary outputs
-scratch/*.png
-scratch/*.jpg
-scratch/*.csv
-scratch/out_*
-scratch/temp_*
-scratch/verify_results/
+scratch/

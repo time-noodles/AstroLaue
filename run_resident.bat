@@ -18,8 +18,8 @@ echo ========================================================
 echo   AstroLaue: Resident Hotkey Watcher Mode
 echo   Python: %PY_CMD%
 echo ========================================================
-echo   Hotkey: [F9] or [Ctrl+Shift+L] to capture and deblur
-echo   Console: Press [Enter] to capture, [Q] to quit
+echo   Hotkey:  [F9] Deblur | [F10] Crystal Axis Alignment
+echo   Console: [Enter] Deblur | [A] Alignment | [Q] Quit
 echo ========================================================
 echo.
 

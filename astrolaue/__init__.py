@@ -17,10 +17,27 @@ from astrolaue.deblur import (
 from astrolaue.analyze import detect_spots, measure_spot_fwhm, SpotResult
 from astrolaue.validate import validate_physical_consistency, compute_residual_map, PhysicsValidationReport
 from astrolaue.export import export_publication_rgba
-from astrolaue.clipboard import copy_image_to_clipboard
+from astrolaue.clipboard import copy_image_to_clipboard, copy_text_to_clipboard
 from astrolaue.visualize import plot_diagnostic_figure, plot_batch_summary_figure, plot_comparison_figure
 from astrolaue.pipeline import AstroLauePipeline, PipelineConfig, PipelineResult
 from astrolaue.watcher import ResidentWatcher
+from astrolaue.alignment import (
+    LaueAlignmentConfig,
+    ZoneLine,
+    AxisCandidate,
+    LaueAlignmentResult,
+    extract_laue_spots_from_image,
+    detector_to_normals,
+    normals_to_gnomonic,
+    detect_zone_lines,
+    find_principal_axis_candidates,
+    calculate_goniometer_angles,
+    gnomonic_to_detector,
+    zone_line_to_detector_hyperbola,
+    solve_laue_alignment,
+    plot_alignment_diagnostics,
+    generate_synthetic_laue_sample,
+)
 
 __version__ = "0.2.0"
 
@@ -45,6 +62,7 @@ __all__ = [
     "PhysicsValidationReport",
     "export_publication_rgba",
     "copy_image_to_clipboard",
+    "copy_text_to_clipboard",
     "plot_diagnostic_figure",
     "plot_batch_summary_figure",
     "plot_comparison_figure",
@@ -52,4 +70,20 @@ __all__ = [
     "PipelineConfig",
     "PipelineResult",
     "ResidentWatcher",
+    "LaueAlignmentConfig",
+    "ZoneLine",
+    "AxisCandidate",
+    "LaueAlignmentResult",
+    "extract_laue_spots_from_image",
+    "detector_to_normals",
+    "normals_to_gnomonic",
+    "detect_zone_lines",
+    "find_principal_axis_candidates",
+    "calculate_goniometer_angles",
+    "gnomonic_to_detector",
+    "zone_line_to_detector_hyperbola",
+    "solve_laue_alignment",
+    "plot_alignment_diagnostics",
+    "generate_synthetic_laue_sample",
 ]
+
