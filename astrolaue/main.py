@@ -201,6 +201,7 @@ def main(args: list[str] | None = None) -> int:
         validate_physics=parsed.validate_physics,
         export_transparent=parsed.export_transparent,
     )
+    pipeline = AstroLauePipeline(config)
 
     # 0. 結晶方位アライメントモード
     if parsed.align:

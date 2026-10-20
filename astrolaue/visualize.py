@@ -16,7 +16,21 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
-from astropy.visualization import AsinhStretch
+try:
+    from astropy.visualization import AsinhStretch
+except ImportError:
+    class AsinhStretch:  # type: ignore
+        """NumPy fallback for astropy.visualization.AsinhStretch."""
+
+        def __init__(self, a: float = 0.1) -> None:
+            self.a = float(a)
+
+        def __call__(self, values: np.ndarray) -> np.ndarray:
+            val = np.asarray(values, dtype=np.float32)
+            denom = np.arcsinh(1.0 / max(self.a, 1e-6))
+            if denom <= 0:
+                return val
+            return np.arcsinh(val / max(self.a, 1e-6)) / denom
 
 import os
 import time
