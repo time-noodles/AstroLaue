@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 import shutil
-from typing import Optional, Dict, Any, List, Literal
+from typing import Optional, Dict, Any, List, Literal, Callable
 
 import cv2
 import numpy as np
@@ -129,10 +129,11 @@ class AstroLauePipeline:
 
     def run(
         self,
-        image_source: Optional[str | Path | np.ndarray] = None,
+        image_source: Optional[str | Path | np.ndarray | SlaueRawData] = None,
         live: bool = False,
         window_title: Optional[str] = None,
         target_mode: str = "auto",
+        on_alignment_ready: Optional[Callable[[LaueAlignmentResult], None]] = None,
     ) -> PipelineResult:
         """単一画像に対するパイプラインを実行します."""
         cfg = self.config
@@ -309,6 +310,45 @@ class AstroLauePipeline:
             method_label = "Wiener"
         else:
             raise ValueError(f"未知の復元手法です: {cfg.method}")
+
+        # ステップ 8b: 【最優先高速実行】 結晶主軸同定 & ゴニオ補正角 (Δθx, Δθy) 推定
+        # 重い直交変換やPNG保存・グラフ描画を待たずに即座に計算し、速報通知を行います
+        alignment_res: Optional[LaueAlignmentResult] = None
+        alignment_fig_path: Optional[Path] = None
+        if cfg.run_alignment and slaue_raw is not None:
+            try:
+                align_cfg = cfg.alignment_config or LaueAlignmentConfig(
+                    camera_length_mm=slaue_raw.camera_length_mm,
+                    sign_y=-1,
+                )
+                from scipy.ndimage import maximum_filter
+                filt = maximum_filter(polar_after, size=(7, 15))
+                is_peak = (polar_after == filt) & (polar_after > 0.15)
+                r_idx, th_idx = np.where(is_peak)
+                if len(r_idx) >= 3:
+                    pk_r_mm = slaue_raw.radii_mm[np.clip(r_idx, 0, len(slaue_raw.radii_mm) - 1)]
+                    pk_th_rad = np.radians(slaue_raw.thetas_deg[np.clip(th_idx, 0, len(slaue_raw.thetas_deg) - 1)])
+                    pk_int = polar_after[r_idx, th_idx]
+                    X_mm = pk_r_mm * np.cos(pk_th_rad)
+                    Y_mm = pk_r_mm * np.sin(pk_th_rad)
+                    spots_xy = np.column_stack([X_mm, Y_mm])
+                    alignment_res = solve_laue_alignment(spots_xy, intensities=pk_int, config=align_cfg)
+
+                if alignment_res is not None:
+                    best = alignment_res.best_candidate
+                    logger.info(
+                        "結晶主軸超高速アライメント完了: 推奨補正角 Δθx=%+.2f°, Δθy=%+.2f° (全傾き角=%.2f°)",
+                        best.delta_theta_x_deg,
+                        best.delta_theta_y_deg,
+                        best.total_tilt_deg,
+                    )
+                    if on_alignment_ready is not None:
+                        try:
+                            on_alignment_ready(alignment_res)
+                        except Exception as e_cb:
+                            logger.warning("on_alignment_ready コールバック中に例外: %s", e_cb)
+            except Exception as e_align_fast:
+                logger.warning("高速アライメント計算中に警告: %s", e_align_fast)
 
         # ステップ 9: 直交座標系への逆極座標変換
         restored_cart = polar_to_cartesian(
@@ -540,43 +580,25 @@ class AstroLauePipeline:
                 physics_report=physics_report,
             )
 
-        # ステップ 14: 結晶主軸同定 & 2軸ゴニオメーター回転補正角 (Δθx, Δθy) の自動算出
-        alignment_res: Optional[LaueAlignmentResult] = None
-        alignment_fig_path: Optional[Path] = None
+        # ステップ 14: 結晶主軸同定 (画像入力時) & アライメント診断図保存
         if cfg.run_alignment:
             try:
                 align_cfg = cfg.alignment_config or LaueAlignmentConfig(
                     camera_length_mm=slaue_raw.camera_length_mm if slaue_raw else 27.0,
                     sign_y=-1 if slaue_raw else 1,
                 )
-                if slaue_raw is not None:
-                    # CSV 極座標の生物理座標から直接ピークを抽出して超高精度アライメント
-                    from scipy.ndimage import maximum_filter
-                    filt = maximum_filter(polar_after, size=(7, 15))
-                    is_peak = (polar_after == filt) & (polar_after > 0.15)
-                    r_idx, th_idx = np.where(is_peak)
-                    if len(r_idx) >= 3:
-                        pk_r_mm = slaue_raw.radii_mm[np.clip(r_idx, 0, len(slaue_raw.radii_mm) - 1)]
-                        pk_th_rad = np.radians(slaue_raw.thetas_deg[np.clip(th_idx, 0, len(slaue_raw.thetas_deg) - 1)])
-                        pk_int = polar_after[r_idx, th_idx]
-                        X_mm = pk_r_mm * np.cos(pk_th_rad)
-                        Y_mm = pk_r_mm * np.sin(pk_th_rad)
-                        spots_xy = np.column_stack([X_mm, Y_mm])
-                        alignment_res = solve_laue_alignment(spots_xy, intensities=pk_int, config=align_cfg)
-                else:
-                    # 直交復元画像からの自動アライメント
+                if alignment_res is None:
+                    # 画像入力時: 直交復元画像からのアライメント
                     alignment_res = solve_laue_alignment(restored_cart, config=align_cfg)
+                    if alignment_res is not None and on_alignment_ready is not None:
+                        try:
+                            on_alignment_ready(alignment_res)
+                        except Exception as e_cb:
+                            logger.warning("on_alignment_ready コールバック中に例外: %s", e_cb)
 
                 if alignment_res is not None:
                     alignment_fig_path = cfg.output_dir / "alignment_diagnostics.png"
                     plot_alignment_diagnostics(alignment_res, save_path=alignment_fig_path)
-                    best = alignment_res.best_candidate
-                    logger.info(
-                        "結晶主軸自動アライメント完了: 推奨補正角 Δθx=%+.2f°, Δθy=%+.2f° (全傾き角=%.2f°)",
-                        best.delta_theta_x_deg,
-                        best.delta_theta_y_deg,
-                        best.total_tilt_deg,
-                    )
             except Exception as e_align:
                 logger.warning("ラウエ結晶主軸アライメント中に警告が発生しました: %s", e_align)
 

@@ -235,20 +235,36 @@ class ResidentWatcher:
                         except Exception:
                             pass
 
-            print("[1/2] 極座標生カウント読み込み & ブラー逆畳み込み実行中...")
-            result = self.pipeline.run(image_source=csv_path)
+            print("[1/2] 極座標生カウント読み込み & 超高速アライメント計算中...")
+            t_start = time.time()
+            alignment_done = False
 
-            print("[2/2] 復元＆アライメント解析完了!")
+            def _on_fast_alignment(align_res) -> None:
+                nonlocal alignment_done
+                elapsed = (time.time() - t_start) * 1000.0
+                best = align_res.best_candidate
+                align_text = f"Δθx = {best.delta_theta_x_deg:+.2f}°, Δθy = {best.delta_theta_y_deg:+.2f}°"
+                print("\n" + "=" * 60)
+                print(f"【⚡ 結晶主軸アライメント速報 ({elapsed:.0f} ms)】")
+                print(f"  >>> 推奨ゴニオ補正角: {align_text} (全傾き角: {best.total_tilt_deg:.2f}°)")
+                copy_text_to_clipboard(align_text)
+                print(f"      (補正角をクリップボードにコピーしました！)")
+                print("=" * 60 + "\n")
+                self._notify_sound(success=True)
+                alignment_done = True
+
+            result = self.pipeline.run(image_source=csv_path, on_alignment_ready=_on_fast_alignment)
+
+            print("[2/2] 高解像度画像出力＆履歴保存完了!")
             print("-" * 60)
             print(f"  * 入力データ      : {csv_path.name}")
             print(f"  * 推定ブラー長 Lθ : {result.blur_length:.2f} px")
 
-            # 結晶主軸アライメント結果のハイライト表示
-            if result.alignment_result:
+            # 結晶主軸アライメント結果の表示 (速報で未表示の場合のフォールバック)
+            if result.alignment_result and not alignment_done:
                 best = result.alignment_result.best_candidate
                 align_text = f"Δθx = {best.delta_theta_x_deg:+.2f}°, Δθy = {best.delta_theta_y_deg:+.2f}°"
                 print(f"  * 【推奨ゴニオ補正角】: {align_text} (全傾き角: {best.total_tilt_deg:.2f}°)")
-                # クリップボードへコピー
                 copy_text_to_clipboard(align_text)
                 print(f"    -> 補正角度 ({align_text}) をクリップボードにコピーしました！")
 
