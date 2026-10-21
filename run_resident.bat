@@ -4,7 +4,8 @@ chcp 65001 >nul
 cd /d "%~dp0"
 
 echo ========================================================
-echo   AstroLaue: Resident Hotkey Watcher Mode
+echo   AstroLaue: Real-time Live & Resident Watcher Mode
+echo   (生データ新着CSV常時自動復元 + 画面キャプチャ常駐)
 echo ========================================================
 
 :: 1. Search for Python in local virtual environment
@@ -79,13 +80,15 @@ goto :script_end
 :python_found
 echo   Python: !PY_CMD!
 echo ========================================================
-echo   Hotkey:  [F9] Deblur  /  [F10] Crystal Axis Alignment
-echo   Console: [Enter] Deblur  /  [A] Alignment  /  [Q] Quit
+echo   Auto-Watch: 新着測定 CSV を自動検知して即座に復元＆角度推定
+echo   Console   : [C] 直近CSV再解析  /  [Enter] キャプチャ復元
+echo               [A] 画面アライメント  /  [Q] 終了
+echo   Hotkey    : [F9] キャプチャ復元  /  [F10] アライメント
 echo ========================================================
 echo.
 
-:: Execute main.py in resident mode (call ensures batch does not terminate early)
-call !PY_CMD! main.py --watch --output ./results_live/ --show-diagnostic --export-transparent %*
+:: Execute main.py in live watcher mode
+call !PY_CMD! main.py --live --output ./results_live/ --show-diagnostic --export-transparent %*
 
 if errorlevel 1 (
     echo.

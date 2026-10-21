@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# AstroLaue 常駐ホットキー監視モードスクリプト (Linux)
+# AstroLaue リアルタイム・ライブ監視スクリプト (Linux)
+# 生データ新着CSV常時自動復元 + 画面キャプチャ
 
 set -e
 
@@ -7,10 +8,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 PY_CMD=""
-if [ -f "${SCRIPT_DIR}/.venv/bin/python" ]; then
-    PY_CMD="${SCRIPT_DIR}/.venv/bin/python"
-elif [ -f "${HOME}/miniconda3/envs/py312/bin/python" ]; then
+if [ -f "${HOME}/miniconda3/envs/py312/bin/python" ]; then
     PY_CMD="${HOME}/miniconda3/envs/py312/bin/python"
+elif [ -f "${SCRIPT_DIR}/.venv/bin/python" ]; then
+    PY_CMD="${SCRIPT_DIR}/.venv/bin/python"
 elif [ -f "${HOME}/.venvs/astrolaue/bin/python" ]; then
     PY_CMD="${HOME}/.venvs/astrolaue/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
@@ -25,15 +26,12 @@ if [ -z "${PY_CMD}" ]; then
 fi
 
 echo "========================================================"
-echo "  AstroLaue: 常駐ホットキー監視モード (Resident Watcher)"
-echo "  Python: ${PY_CMD}"
+echo "  AstroLaue: Real-time Live & Resident Watcher Mode"
+echo "  (生データ新着CSV常時自動復元 + 画面キャプチャ常駐)"
 echo "========================================================"
-echo "  キー操作: [Enter] 復元実行 | [A] 結晶主軸アライメント | [Q] 終了"
-echo "========================================================"
-echo ""
 
 exec "${PY_CMD}" "${SCRIPT_DIR}/main.py" \
-    --watch \
+    --live \
     --output "${SCRIPT_DIR}/results_live/" \
     --show-diagnostic \
     --export-transparent "$@"
