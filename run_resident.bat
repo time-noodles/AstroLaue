@@ -4,8 +4,8 @@ chcp 65001 >nul
 cd /d "%~dp0"
 
 echo ========================================================
-echo   AstroLaue: Real-time Live & Resident Watcher Mode
-echo   (生データ新着CSV常時自動復元 + 画面キャプチャ常駐)
+echo   AstroLaue: Real-time Live Watcher Mode
+echo   (Auto-detect new CSV + Screen capture)
 echo ========================================================
 
 :: 1. Search for Python in local virtual environment
@@ -80,10 +80,10 @@ goto :script_end
 :python_found
 echo   Python: !PY_CMD!
 echo ========================================================
-echo   Auto-Watch: 新着測定 CSV を自動検知して即座に復元＆角度推定
-echo   Console   : [C] 直近CSV再解析  /  [Enter] キャプチャ復元
-echo               [A] 画面アライメント  /  [Q] 終了
-echo   Hotkey    : [F9] キャプチャ復元  /  [F10] アライメント
+echo   Auto-Watch: Monitoring raw CSV folder for auto-restore
+echo   Console   : [C] Re-analyze latest CSV  /  [Enter] Screen capture
+echo               [A] Screen alignment       /  [Q] Quit
+echo   Hotkey    : [F9] Screen capture        /  [F10] Alignment
 echo ========================================================
 echo.
 
