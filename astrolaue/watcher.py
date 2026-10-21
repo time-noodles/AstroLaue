@@ -376,6 +376,22 @@ class ResidentWatcher:
         finally:
             self._lock.release()
 
+    def trigger_restore_latest_csv(self) -> bool:
+        """監視フォルダ内の最も新しいCSVファイルを再読み込みして復元を実行します."""
+        if not self.watch_dir or not self.watch_dir.is_dir():
+            print("\n[!] 監視フォルダが設定されていないため、最新CSVを取得できません。")
+            return False
+
+        csv_files = list(self.watch_dir.glob("*.CSV")) + list(self.watch_dir.glob("*.csv"))
+        if not csv_files:
+            print(f"\n[!] 監視フォルダ ({self.watch_dir}) 内に CSV ファイルが見つかりません。")
+            return False
+
+        csv_files.sort(key=lambda p: p.stat().st_mtime)
+        latest_csv = csv_files[-1]
+        print(f"\n[*] 直近の測定CSV ({latest_csv.name}) を再解析します...")
+        return self.trigger_restore_from_csv(latest_csv)
+
     def _notify_sound(self, success: bool = True) -> None:
         """処理完了をビープ音で通知します."""
         if sys.platform == "win32":
@@ -398,15 +414,15 @@ class ResidentWatcher:
     def _print_help(self) -> None:
         """キー操作ヘルプを表示します."""
         print("\n" + "=" * 65)
-        print("  【AstroLaue コマンド操作一覧】")
-        print("    [Enter]       : キャプチャ & 画像復元 (デブラー) 実行")
-        print("    [A] + [Enter] : キャプチャ & 結晶主軸アライメント (角度推定) 実行 ★高速")
-        print("    [F9]          : (Windows) グローバルホットキー: 画像復元")
-        print("    [F10]         : (Windows) グローバルホットキー: 結晶主軸アライメント")
-        print("    [Ctrl+Shift+L]: (Windows) 代替ホットキー: 画像復元")
-        print("    [Ctrl+Shift+A]: (Windows) 代替ホットキー: 結晶主軸アライメント")
-        print("    [H] + [Enter] : このヘルプを表示")
-        print("    [Q] + [Enter] : 常駐監視を終了")
+        print("  【AstroLaue ライブ監視コマンド一覧】")
+        print("    ★ 常時自動監視 : 測定ソフトで測定完了 (.CSV 保存) 時に全自動復元＆角度推定")
+        print("    [C] + [Enter]   : 直近の最新測定 CSV を再解析・再復元")
+        print("    [Enter]         : 画面キャプチャによる即時手動復元 (表示中ウィンドウ)")
+        print("    [A] + [Enter]   : 画面キャプチャからの結晶主軸アライメント (高速角度推定)")
+        print("    [F9]  (Windows) : グローバルホットキー: 画面キャプチャ復元")
+        print("    [F10] (Windows) : グローバルホットキー: 結晶主軸アライメント")
+        print("    [H] + [Enter]   : このヘルプを表示")
+        print("    [Q] + [Enter]   : ライブ監視を終了")
         print("=" * 65 + "\n")
 
     def run(self) -> None:
@@ -414,27 +430,22 @@ class ResidentWatcher:
         self._running = True
 
         print("=" * 65)
-        print("  AstroLaue: 常駐ホットキー監視モード (Resident Watcher)")
+        print("  AstroLaue: リアルタイム・ライブ監視モード (Live Watcher)")
         print("=" * 65)
-        print("  【トリガー操作】")
-        print("    [Enter] (コンソール): キャプチャ & 画像復元 (デブラー) 実行")
-        print("    [A] + [Enter]      : キャプチャ & 結晶主軸アライメント (角度推定) 実行 ★高速")
-        print("    [F9]  (Windows)    : グローバルホットキー: 画像復元")
-        print("    [F10] (Windows)    : グローバルホットキー: 結晶主軸アライメント")
-        print("    [Ctrl+Shift+L]     : 代替ホットキー: 画像復元")
-        print("    [Ctrl+Shift+A]     : 代替ホットキー: 結晶主軸アライメント")
-        print("    [Q] + [Enter]      : 終了")
-        print("  -------------------------------------------------------------")
         if self.watch_dir and self.watch_dir.is_dir():
             print(f"  * 【生データ常時監視】: {self.watch_dir.resolve()}")
-            print("    -> 新しい測定 (.CSV) が保存された瞬間に自動で完全復元＆角度推定！")
+            print("    -> 測定ソフトで測定 (.CSV) が保存された瞬間に自動で完全復元＆角度推定！")
         else:
             print("  * (生データ自動監視フォルダ未設定: 手動キャプチャまたは --watch-dir で指定可能)")
-        print("  * 測定ソフト、画像ビューア、ブラウザ等を画面に表示した状態で")
-        print("    ホットキーまたはコマンドキーを押すだけで即座に解析されます。")
-        print("  * 復元結果およびアライメント診断図は results_live/ に自動保存されます。")
+        print("  * 【コマンド操作】")
+        print("    - 自動監視   : 新着CSVファイルを常時バックグラウンド待機中")
+        print("    - [C] + Enter: 直近の最新測定 CSV を再解析・再復元")
+        print("    - [Enter]    : 画面キャプチャ即時復元 (特定アプリに依存せず自動切り出し)")
+        print("    - [A] + Enter: 画面キャプチャから結晶主軸アライメント")
+        print("    - [Q] + Enter: 終了")
+        print("  * 復元結果・アライメント診断図・透過PNGは results_live/ に自動保存されます。")
         print("=" * 65)
-        print("\n待機中... ([Enter]: キャプチャ復元, [A]: 角度アライメント, [Q]: 終了)\n")
+        print("\n待機中... (自動検知待機 / [C]: 最新CSV再解析, [Enter]: キャプチャ, [Q]: 終了)\n")
 
         # フォルダ監視スレッドを起動 (バックグラウンドで新着CSVを常時自動検知)
         dir_thread = None
@@ -457,13 +468,16 @@ class ResidentWatcher:
                     print("[*] 終了コマンドを受け付けました。常駐監視を終了します。")
                     self._running = False
                     break
-                elif line in ("a", "align", "alignment", "gonio", "axis", "c"):
+                elif line in ("c", "csv", "latest", "re"):
+                    # 最新CSVを再処理
+                    self.trigger_restore_latest_csv()
+                elif line in ("a", "align", "alignment", "gonio", "axis"):
                     # 結晶主軸アライメントを実行
                     self.trigger_crystal_alignment()
                 elif line in ("h", "help", "?"):
                     self._print_help()
                 else:
-                    # Enter押下で即時復元実行
+                    # Enter押下で即時画面キャプチャ復元実行
                     self.trigger_capture_and_restore()
         except (KeyboardInterrupt, EOFError):
             print("\n[*] 常駐監視を終了します。")

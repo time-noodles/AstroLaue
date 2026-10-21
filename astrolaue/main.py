@@ -100,15 +100,15 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="物理的妥当性検証 (光量保存性・重心不変性・残差マップ) を実行する (デフォルト: True)",
     )
     parser.add_argument(
-        "--live",
+        "--live", "--watch", "-w",
         action="store_true",
-        help="画面キャプチャモード (手前のウィンドウまたは画面全体から1回自動取得して復元)",
+        dest="live",
+        help="リアルタイム・ライブ監視モード (生データフォルダ新着CSV常時自動復元 + ホットキー/Enter手動キャプチャ)",
     )
     parser.add_argument(
-        "--watch", "--resident",
+        "--snapshot", "--capture-once",
         action="store_true",
-        dest="watch",
-        help="常駐監視モード (生データフォルダ新着CSV監視 + ホットキー [F9] / Enter で自動復元)",
+        help="単発画面キャプチャモード (手前のウィンドウまたは画面全体から1回取得して終了)",
     )
     parser.add_argument(
         "--watch-dir",
@@ -279,10 +279,17 @@ def main(args: list[str] | None = None) -> int:
         print(f"アライメント診断図を保存しました: {diag_path.resolve()}\n")
         return 0
 
-    # 1. 常駐監視モード (生データ新着CSV監視 + ホットキー監視)
-    if parsed.watch:
+    # 1. リアルタイム・ライブ監視モード (生データ新着CSV監視 + ホットキー/Enter監視)
+    # --live, --watch が指定された場合、または入力・バッチ指定がない場合のデフォルト動作
+    input_path = parsed.csv or parsed.input
+    is_live_mode = parsed.live or getattr(parsed, "watch", False)
+    if not is_live_mode and input_path is None and parsed.batch_dir is None and not parsed.align and not getattr(parsed, "snapshot", False):
+        logger.info("入力指定がないため、デフォルトのリアルタイム・ライブ監視モードを起動します。")
+        is_live_mode = True
+
+    if is_live_mode:
         from astrolaue.watcher import ResidentWatcher
-        logger.info("常駐監視モードを起動します (出力先: %s, 監視先: %s)", parsed.output, parsed.watch_dir or "自動探索")
+        logger.info("リアルタイム・ライブ監視モードを起動します (出力先: %s, 監視先: %s)", parsed.output, parsed.watch_dir or "自動探索")
         watcher = ResidentWatcher(
             config=config,
             output_dir=parsed.output,
@@ -349,7 +356,7 @@ def main(args: list[str] | None = None) -> int:
     try:
         res = pipeline.run(
             image_source=input_path,
-            live=parsed.live,
+            live=getattr(parsed, "snapshot", False),
             window_title=parsed.window_title,
             target_mode=parsed.target_mode,
         )

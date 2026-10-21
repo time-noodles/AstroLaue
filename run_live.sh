@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# AstroLaue ライブ画面キャプチャ＆復元スクリプト (Linux)
+# AstroLaue リアルタイム・ライブ監視スクリプト (Linux)
+# 生データ新着CSV常時自動復元 + 画面キャプチャ
 
 set -e
 
@@ -7,7 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 PY_CMD=""
-if [ -f "${SCRIPT_DIR}/.venv/bin/python" ]; then
+if [ -f "${HOME}/miniconda3/envs/py312/bin/python" ]; then
+    PY_CMD="${HOME}/miniconda3/envs/py312/bin/python"
+elif [ -f "${SCRIPT_DIR}/.venv/bin/python" ]; then
     PY_CMD="${SCRIPT_DIR}/.venv/bin/python"
 elif [ -f "${HOME}/.venvs/astrolaue/bin/python" ]; then
     PY_CMD="${HOME}/.venvs/astrolaue/bin/python"
@@ -22,18 +25,13 @@ if [ -z "${PY_CMD}" ]; then
     exit 1
 fi
 
-TITLE_ARG=""
-if [ $# -ge 1 ]; then
-    TITLE_ARG="--window-title $1"
-fi
-
 echo "========================================================"
-echo "  AstroLaue: 画面キャプチャ＆復元 (特定アプリに非依存)"
+echo "  AstroLaue: Real-time Live Watcher Mode"
+echo "  (生データ新着CSV常時自動復元 + 画面キャプチャ常駐)"
 echo "========================================================"
 
 exec "${PY_CMD}" "${SCRIPT_DIR}/main.py" \
     --live \
-    ${TITLE_ARG} \
     --output "${SCRIPT_DIR}/results_live/" \
     --show-diagnostic \
     --export-transparent "$@"
