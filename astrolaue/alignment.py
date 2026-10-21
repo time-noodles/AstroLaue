@@ -40,8 +40,8 @@ class LaueAlignmentConfig:
     """背面反射ラウエ結晶方位自動アライメント設定パラメータ."""
 
     # 実験幾何・検出器パラメータ
-    camera_length_mm: float = 40.0
-    """試料―検出器間距離 L [mm] (通常 30〜100 mm)."""
+    camera_length_mm: float = 27.0
+    """試料―検出器間距離 L [mm] (通常 27〜100 mm、sLaue 実機幾何: 27.0 mm)."""
 
     pixel_size_mm: float = 0.05
     """検出器ピクセルサイズ [mm/pix] (例: 50 um = 0.05 mm)."""
@@ -105,7 +105,7 @@ class LaueAlignmentConfig:
     """X軸回転の符号係数 (+1 または -1)."""
 
     sign_y: int = 1
-    """Y軸回転の符号係数 (+1 または -1)."""
+    """Y軸回転の符号係数 (+1 または -1、数学的標準: 1, sLaue実機: -1)."""
 
 
 @dataclass
@@ -657,7 +657,8 @@ def find_principal_axis_candidates(
                 all_zones.update(m["zones"])
             contributing = sorted(list(all_zones))
 
-            zone_multi = len(contributing) ** 1.3
+            # 多重交点 (3本以上・4本以上の晶帯が集中する真の結晶対称軸) を強力に優遇
+            zone_multi = len(contributing) ** 2.2
             tilt_pen = np.exp(-0.5 * (np.hypot(u_clust, v_clust) / (max_u_v * 0.75)) ** 2)
             clust_score = total_w * zone_multi * tilt_pen
 
@@ -888,6 +889,11 @@ def solve_laue_alignment(
             detected_intensities = np.asarray(intensities, dtype=np.float64)
         else:
             detected_intensities = np.ones(len(spots_xy_mm), dtype=np.float64)
+        # 主要晶帯探索のため、強度降順に自動ソート
+        if len(detected_intensities) > 0:
+            sort_order = np.argsort(-detected_intensities)
+            spots_xy_mm = spots_xy_mm[sort_order]
+            detected_intensities = detected_intensities[sort_order]
 
     if len(spots_xy_mm) == 0:
         raise ValueError("スポットが1点も検出されませんでした。入力画像または閾値を確認してください。")

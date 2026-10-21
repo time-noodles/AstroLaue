@@ -47,6 +47,7 @@ venv.bak/
 
 # Pipeline and benchmark output directories
 results/
+results_*/
 results_live/
 results_batch/
 results_test/
@@ -55,3 +56,6 @@ history/
 
 # Scratch temporary outputs
 scratch/
+
+# Local raw measurement data
+share/slaue-data/

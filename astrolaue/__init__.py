@@ -6,6 +6,7 @@
 """
 
 from astrolaue.capture import extract_diffraction_roi, load_image, capture_window
+from astrolaue.io import load_slaue_csv, SlaueRawData
 from astrolaue.normalize import detect_center_and_radius, normalize_geometry, subtract_background
 from astrolaue.polar import cartesian_to_polar, polar_to_cartesian
 from astrolaue.deblur import (
@@ -44,6 +45,8 @@ __version__ = "0.2.0"
 __all__ = [
     "extract_diffraction_roi",
     "load_image",
+    "load_slaue_csv",
+    "SlaueRawData",
     "capture_window",
     "detect_center_and_radius",
     "normalize_geometry",

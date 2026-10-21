@@ -37,22 +37,66 @@ from astrolaue.clipboard import copy_image_to_clipboard, copy_text_to_clipboard
 logger = logging.getLogger(__name__)
 
 
+def find_default_watch_dir() -> Optional[Path]:
+    """測定PC上の LaueCamera 生データ保存フォルダ (例: Data/2610) を自動探索します."""
+    # 1. path.txt のチェック (作業ディレクトリ or share/slaue-data/)
+    for cand in [Path("path.txt"), Path("share/slaue-data/path.txt")]:
+        if cand.is_file():
+            try:
+                line = cand.read_text(encoding="utf-8", errors="replace").strip()
+                if line:
+                    p = Path(line)
+                    if p.is_dir():
+                        return p
+                    # Windowsパスが書かれている場合
+                    if "\\" in line:
+                        p_win = Path(line.replace("\\", "/"))
+                        if p_win.is_dir():
+                            return p_win
+            except Exception:
+                pass
+
+    # 2. 標準ドキュメントフォルダ探索 (Windows / Linux)
+    candidates_base = []
+    if sys.platform == "win32":
+        user_profile = os.environ.get("USERPROFILE", "")
+        if user_profile:
+            candidates_base.append(Path(user_profile) / "Documents" / "LaueCamera" / "Data")
+            candidates_base.append(Path(user_profile) / "Documents" / "u-X360" / "Data")
+    home = Path.home()
+    candidates_base.append(home / "Documents" / "LaueCamera" / "Data")
+    candidates_base.append(home / "Documents" / "u-X360" / "Data")
+    candidates_base.append(Path("share/slaue-data"))
+
+    for base in candidates_base:
+        if base.is_dir():
+            # 年月フォルダ (例: 2610, 2609...) のうち最新のものを探索
+            subdirs = [d for d in base.iterdir() if d.is_dir() and d.name.isdigit()]
+            if subdirs:
+                subdirs.sort(key=lambda d: d.name)
+                return subdirs[-1]
+            return base
+
+    return None
+
+
 class ResidentWatcher:
-    """ホットキー監視による常駐キャプチャ＆復元・結晶方位アライメントマネージャー."""
+    """ホットキー監視＆生データフォルダ監視による常駐自動復元・結晶方位アライメントマネージャー."""
 
     def __init__(
         self,
         config: Optional[PipelineConfig] = None,
         output_dir: str | Path = "./results_live",
+        watch_dir: Optional[str | Path] = None,
         window_title: Optional[str] = None,
         monitor_index: int = 1,
         target_mode: str = "auto",
         hotkey_name: str = "F9",
-        camera_length_mm: float = 40.0,
+        camera_length_mm: float = 27.0,
         pixel_size_mm: float = 0.05,
         stage_order: Literal["XY", "YX"] = "XY",
         sign_x: int = 1,
-        sign_y: int = 1,
+        sign_y: int = -1,
         alignment_config: Optional[LaueAlignmentConfig] = None,
     ) -> None:
         self.output_dir = Path(output_dir)
@@ -67,6 +111,14 @@ class ResidentWatcher:
         self._running = False
         self._is_processing = False
         self._lock = threading.Lock()
+
+        # 監視対象フォルダの初期化
+        if watch_dir:
+            self.watch_dir = Path(watch_dir)
+        else:
+            self.watch_dir = find_default_watch_dir()
+
+        self._seen_csv_files: set[str] = set()
 
         # 結晶方位アライメント設定
         self.alignment_config = alignment_config or LaueAlignmentConfig(
@@ -156,6 +208,83 @@ class ResidentWatcher:
                 print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}")
             self._notify_sound(success=False)
             print("\n>>> 待機中... ([Enter]: 復元, [A]: 角度アライメント) <<<")
+            return False
+
+        finally:
+            self._lock.release()
+
+    def trigger_restore_from_csv(self, csv_path: Path) -> bool:
+        """sLaue CSV生データから直接極座標復元＆結晶方位アライメントを自動実行します."""
+        if not self._lock.acquire(blocking=False):
+            print(f"\n[!] 処理中のため、新着CSV ({csv_path.name}) の処理を保留します...")
+            return False
+
+        try:
+            print("\n" + "=" * 60)
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"[*] 新着生データ検知: {csv_path.name} ({now_str})")
+            print(f"    (保存元: {csv_path.parent})")
+            print("=" * 60)
+
+            # 出力ディレクトリ直下の古いファイルを初期化クリーンアップ (history/ は保護)
+            if self.output_dir.exists():
+                for f in self.output_dir.iterdir():
+                    if f.is_file() and f.suffix.lower() in [".png", ".csv", ".jpg"]:
+                        try:
+                            f.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+
+            print("[1/2] 極座標生カウント読み込み & ブラー逆畳み込み実行中...")
+            result = self.pipeline.run(image_source=csv_path)
+
+            print("[2/2] 復元＆アライメント解析完了!")
+            print("-" * 60)
+            print(f"  * 入力データ      : {csv_path.name}")
+            print(f"  * 推定ブラー長 Lθ : {result.blur_length:.2f} px")
+
+            # 結晶主軸アライメント結果のハイライト表示
+            if result.alignment_result:
+                best = result.alignment_result.best_candidate
+                align_text = f"Δθx = {best.delta_theta_x_deg:+.2f}°, Δθy = {best.delta_theta_y_deg:+.2f}°"
+                print(f"  * 【推奨ゴニオ補正角】: {align_text} (全傾き角: {best.total_tilt_deg:.2f}°)")
+                # クリップボードへコピー
+                copy_text_to_clipboard(align_text)
+                print(f"    -> 補正角度 ({align_text}) をクリップボードにコピーしました！")
+
+            if result.spots:
+                reductions = [s.fwhm_reduction_ratio for s in result.spots if s.fwhm_before > 0]
+                avg_red = sum(reductions) / len(reductions) if reductions else 0.0
+                print(f"  * 平均FWHM先鋭化率: {avg_red:.1f} %")
+                print(f"  * 検出スポット数  : {len(result.spots)} 個")
+
+            print(f"  * 保存先フォルダ  : {self.output_dir.resolve()}")
+            print("  * 直下の最新成果物一覧:")
+            if self.output_dir.exists():
+                direct_files = [f for f in self.output_dir.iterdir() if f.is_file()]
+                for df in sorted(direct_files):
+                    mtime_str = datetime.datetime.fromtimestamp(df.stat().st_mtime).strftime("%H:%M:%S")
+                    size_kb = df.stat().st_size / 1024.0
+                    print(f"    - {df.name:<34} (更新: {mtime_str}, {size_kb:6.1f} KB)")
+            if result.history_png_path:
+                print(f"  * 履歴永続保存    : {result.history_png_path.resolve()}")
+            print("-" * 60)
+
+            # 成功通知音
+            self._notify_sound(success=True)
+            print("\n>>> 自動監視中... (新着CSVを常時待機 / [Enter]: キャプチャ復元, [Q]: 終了) <<<")
+            return True
+
+        except Exception as ex:
+            import traceback
+            tb_str = traceback.format_exc()
+            logger.error("CSV復元中にエラーが発生しました: %s\n%s", ex, tb_str)
+            print(f"\n[ERROR] CSV復元処理に失敗しました: {ex}")
+            tb_lines = [l for l in tb_str.strip().splitlines() if l.strip()]
+            if len(tb_lines) > 1:
+                print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}")
+            self._notify_sound(success=False)
+            print("\n>>> 自動監視中... <<<")
             return False
 
         finally:
@@ -296,12 +425,22 @@ class ResidentWatcher:
         print("    [Ctrl+Shift+A]     : 代替ホットキー: 結晶主軸アライメント")
         print("    [Q] + [Enter]      : 終了")
         print("  -------------------------------------------------------------")
-        print("  * 特定のアプリに依存しません。")
+        if self.watch_dir and self.watch_dir.is_dir():
+            print(f"  * 【生データ常時監視】: {self.watch_dir.resolve()}")
+            print("    -> 新しい測定 (.CSV) が保存された瞬間に自動で完全復元＆角度推定！")
+        else:
+            print("  * (生データ自動監視フォルダ未設定: 手動キャプチャまたは --watch-dir で指定可能)")
         print("  * 測定ソフト、画像ビューア、ブラウザ等を画面に表示した状態で")
         print("    ホットキーまたはコマンドキーを押すだけで即座に解析されます。")
         print("  * 復元結果およびアライメント診断図は results_live/ に自動保存されます。")
         print("=" * 65)
-        print("\n待機中... ([Enter]: 復元, [A]: 角度アライメント, [Q]: 終了)\n")
+        print("\n待機中... ([Enter]: キャプチャ復元, [A]: 角度アライメント, [Q]: 終了)\n")
+
+        # フォルダ監視スレッドを起動 (バックグラウンドで新着CSVを常時自動検知)
+        dir_thread = None
+        if self.watch_dir and self.watch_dir.is_dir():
+            dir_thread = threading.Thread(target=self._directory_watcher_loop, daemon=True)
+            dir_thread.start()
 
         # Windowsの場合はctypesによるグローバルホットキー監視スレッドを起動
         hotkey_thread = None
@@ -329,6 +468,48 @@ class ResidentWatcher:
         except (KeyboardInterrupt, EOFError):
             print("\n[*] 常駐監視を終了します。")
             self._running = False
+
+    def _directory_watcher_loop(self) -> None:
+        """測定PCの生データフォルダ (例: Data/2610/) を監視し、新着CSVを検知したら即座に復元を実行します."""
+        if not self.watch_dir or not self.watch_dir.is_dir():
+            return
+
+        # 起動時に既存のファイルを追跡登録
+        try:
+            for f in self.watch_dir.glob("*.CSV"):
+                self._seen_csv_files.add(f.name)
+            for f in self.watch_dir.glob("*.csv"):
+                self._seen_csv_files.add(f.name)
+            logger.info("フォルダ監視初期化完了: %s (既存 %d ファイルを追跡)", self.watch_dir, len(self._seen_csv_files))
+        except Exception as e_init:
+            logger.warning("フォルダ監視初期化中に例外: %s", e_init)
+
+        while self._running:
+            try:
+                if self.watch_dir.exists():
+                    current_csvs = list(self.watch_dir.glob("*.CSV")) + list(self.watch_dir.glob("*.csv"))
+                    new_files = [f for f in current_csvs if f.name not in self._seen_csv_files]
+
+                    if new_files:
+                        new_files.sort(key=lambda p: p.stat().st_mtime)
+                        for target_csv in new_files:
+                            # 測定ソフトのファイル書き込み完了を待機
+                            time.sleep(0.8)
+                            sz1 = target_csv.stat().st_size
+                            time.sleep(0.4)
+                            sz2 = target_csv.stat().st_size
+                            if sz1 == sz2 and sz1 > 1024:
+                                self._seen_csv_files.add(target_csv.name)
+                                # 別スレッドで自動復元を実行
+                                threading.Thread(
+                                    target=self.trigger_restore_from_csv,
+                                    args=(target_csv,),
+                                    daemon=True,
+                                ).start()
+            except Exception as e_watch:
+                logger.debug("フォルダ監視ループ中の例外: %s", e_watch)
+
+            time.sleep(1.0)
 
     def _win32_hotkey_loop(self) -> None:
         """Windows API (RegisterHotKey) によるグローバルホットキー監視スレッド."""

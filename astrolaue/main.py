@@ -108,7 +108,19 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--watch", "--resident",
         action="store_true",
         dest="watch",
-        help="常駐ホットキー監視モード (F9 または Ctrl+Shift+L でいつでも即時キャプチャ＆復元)",
+        help="常駐監視モード (生データフォルダ新着CSV監視 + ホットキー [F9] / Enter で自動復元)",
+    )
+    parser.add_argument(
+        "--watch-dir",
+        type=str,
+        default=None,
+        help="生データ (.CSV) 監視フォルダパス (省略時は Data/2610 等を自動探索)",
+    )
+    parser.add_argument(
+        "--csv",
+        type=str,
+        default=None,
+        help="Rigaku sLaue 極座標生データ (.CSV) ファイルパス",
     )
     parser.add_argument(
         "--window-title",
@@ -136,14 +148,14 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--camera-length", "-L",
         type=float,
-        default=40.0,
-        help="試料―検出器間距離 L [mm] (アライメント用、デフォルト: 40.0)",
+        default=27.0,
+        help="試料―検出器間距離 L [mm] (アライメント用、sLaue 実機幾何: 27.0)",
     )
     parser.add_argument(
         "--pixel-size",
         type=float,
         default=0.05,
-        help="検出器ピクセルサイズ [mm/pix] (アライメント用、デフォルト: 0.05)",
+        help="検出器ピクセルサイズ [mm/pix] (画像入力時アライメント用、デフォルト: 0.05)",
     )
     parser.add_argument(
         "--stage-order",
@@ -162,8 +174,8 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--sign-y",
         type=int,
         choices=[1, -1],
-        default=1,
-        help="Y軸回転の符号係数 (デフォルト: 1)",
+        default=-1,
+        help="Y軸回転の符号係数 (sLaue 実機ステージ整合: -1)",
     )
     parser.add_argument(
         "--log-level",
@@ -267,21 +279,22 @@ def main(args: list[str] | None = None) -> int:
         print(f"アライメント診断図を保存しました: {diag_path.resolve()}\n")
         return 0
 
-    # 1. 常駐ホットキー監視モード
+    # 1. 常駐監視モード (生データ新着CSV監視 + ホットキー監視)
     if parsed.watch:
         from astrolaue.watcher import ResidentWatcher
-        logger.info("常駐ホットキー監視モードを起動します (出力先: %s)", parsed.output)
+        logger.info("常駐監視モードを起動します (出力先: %s, 監視先: %s)", parsed.output, parsed.watch_dir or "自動探索")
         watcher = ResidentWatcher(
             config=config,
             output_dir=parsed.output,
+            watch_dir=parsed.watch_dir,
             window_title=parsed.window_title,
             monitor_index=parsed.monitor,
             target_mode=parsed.target_mode,
-            camera_length_mm=getattr(parsed, "camera_length", 40.0),
+            camera_length_mm=getattr(parsed, "camera_length", 27.0),
             pixel_size_mm=getattr(parsed, "pixel_size", 0.05),
             stage_order=getattr(parsed, "stage_order", "XY"),
             sign_x=getattr(parsed, "sign_x", 1),
-            sign_y=getattr(parsed, "sign_y", 1),
+            sign_y=getattr(parsed, "sign_y", -1),
         )
         watcher.run()
         return 0
@@ -308,8 +321,8 @@ def main(args: list[str] | None = None) -> int:
             logger.exception("バッチ処理中にエラーが発生しました: %s", e)
             return 1
 
-    # 3. 単一画像 / ライブキャプチャモード
-    input_path = parsed.input
+    # 3. 単一画像 / CSV生データ / ライブキャプチャモード
+    input_path = parsed.csv or parsed.input
     if not parsed.live and input_path is None:
         # デフォルト探索
         if Path("share/画像260925.png").is_file():
@@ -369,6 +382,11 @@ def main(args: list[str] | None = None) -> int:
             print(f"・診断レポート図: {res.diagnostic_fig_path}")
         if res.spots_csv_path:
             print(f"・スポット解析CSV: {res.spots_csv_path}")
+        if res.alignment_result:
+            best = res.alignment_result.best_candidate
+            print(f"・【推奨ゴニオ補正角】: Δθx = {best.delta_theta_x_deg:+.2f}°, Δθy = {best.delta_theta_y_deg:+.2f}° (全傾き角: {best.total_tilt_deg:.2f}°)")
+            if res.alignment_fig_path:
+                print(f"・アライメント診断図: {res.alignment_fig_path}")
         print("・クリップボード: 提出用透過PNGをクリップボードに自動格納しました")
         print("==========================================\n")
         return 0

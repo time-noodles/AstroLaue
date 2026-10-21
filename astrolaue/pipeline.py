@@ -19,6 +19,13 @@ import cv2
 import numpy as np
 
 from astrolaue.capture import load_image, capture_window, extract_diffraction_roi
+from astrolaue.io import load_slaue_csv, SlaueRawData
+from astrolaue.alignment import (
+    solve_laue_alignment,
+    LaueAlignmentConfig,
+    LaueAlignmentResult,
+    plot_alignment_diagnostics,
+)
 from astrolaue.normalize import detect_center_and_radius, normalize_geometry, subtract_background
 from astrolaue.polar import cartesian_to_polar, polar_to_cartesian
 from astrolaue.deblur import (
@@ -77,6 +84,8 @@ class PipelineConfig:
     export_asinh: bool = True
     asinh_beta: Optional[float] = None
     export_comparison: bool = True
+    run_alignment: bool = True
+    alignment_config: Optional[LaueAlignmentConfig] = None
 
 
 @dataclass
@@ -107,6 +116,8 @@ class PipelineResult:
     physics_report: Optional[PhysicsValidationReport] = None
     residual_polar: Optional[np.ndarray] = None
     psf_params: Optional[Dict[str, Any]] = None
+    alignment_result: Optional[LaueAlignmentResult] = None
+    alignment_fig_path: Optional[Path] = None
 
 
 class AstroLauePipeline:
@@ -138,71 +149,109 @@ class AstroLauePipeline:
         except Exception as e_clean:
             logger.debug("出力ディレクトリの事前クリーンアップ中に例外: %s", e_clean)
 
-        # ステップ 1: 入力画像取得
-        if live:
-            logger.info("ライブキャプチャを実行中 (タイトル指定: %s, モード: %s)...", window_title, target_mode)
-            raw_image = capture_window(window_title_pattern=window_title, target_mode=target_mode)
-        elif image_source is not None:
-            if isinstance(image_source, (str, Path)):
-                logger.info("画像ファイルを読み込み中: %s", image_source)
-                raw_image = load_image(image_source)
-            elif isinstance(image_source, np.ndarray):
-                raw_image = image_source.copy()
+        # ステップ 1: 入力データ取得 (画像 または sLaue CSV 生データ)
+        is_slaue_csv = False
+        slaue_raw: Optional[SlaueRawData] = None
+
+        if isinstance(image_source, SlaueRawData):
+            is_slaue_csv = True
+            slaue_raw = image_source
+        elif isinstance(image_source, (str, Path)) and str(image_source).lower().endswith(".csv"):
+            is_slaue_csv = True
+            logger.info("Rigaku sLaue CSV 生データを検出しました: %s", image_source)
+            slaue_raw = load_slaue_csv(image_source)
+
+        if is_slaue_csv and slaue_raw is not None:
+            # CSV 直接読み込みモード: 直交 -> 極座標変換を完全にスキップ
+            logger.info("極座標生カウントデータから直接復元パイプラインを実行します (補間ボケ・中心誤差ゼロ)")
+            polar_before = slaue_raw.to_normalized_polar()
+
+            # 直交座標表示・出力用の幾何パラメータ生成
+            out_sz = cfg.output_size
+            norm_center = (out_sz / 2.0, out_sz / 2.0)
+            norm_r_outer = (out_sz / 2.0) * 0.95
+            r_min_mm = float(slaue_raw.radii_mm.min())
+            r_max_mm = float(slaue_raw.radii_mm.max())
+            norm_r0 = norm_r_outer * (r_min_mm / r_max_mm)
+            r_range = (float(norm_r0), float(norm_r_outer))
+
+            # 未復元の直交展開画像を生成
+            norm_img = polar_to_cartesian(
+                polar_before,
+                output_shape=(out_sz, out_sz),
+                center=norm_center,
+                r_range=r_range,
+            )
+            bg_subtracted = norm_img
+            cropped_roi = norm_img
+            center_crop = norm_center
+            r0 = norm_r0
+            r_outer = norm_r_outer
+            bbox = (0, 0, out_sz, out_sz)
+        else:
+            if live:
+                logger.info("ライブキャプチャを実行中 (タイトル指定: %s, モード: %s)...", window_title, target_mode)
+                raw_image = capture_window(window_title_pattern=window_title, target_mode=target_mode)
+            elif image_source is not None:
+                if isinstance(image_source, (str, Path)):
+                    logger.info("画像ファイルを読み込み中: %s", image_source)
+                    raw_image = load_image(image_source)
+                elif isinstance(image_source, np.ndarray):
+                    raw_image = image_source.copy()
+                else:
+                    raise TypeError(f"不正な image_source タイプです: {type(image_source)}")
             else:
-                raise TypeError(f"不正な image_source タイプです: {type(image_source)}")
-        else:
-            raise ValueError("image_source または live=True のいずれかを指定してください。")
+                raise ValueError("image_source または live=True のいずれかを指定してください。")
 
-        # ステップ 2: 回折像ROI切り出し
-        cropped_roi, bbox = extract_diffraction_roi(raw_image)
-        logger.info("ROI切り出し完了: %s, shape=%s", bbox, cropped_roi.shape)
+            # ステップ 2: 回折像ROI切り出し
+            cropped_roi, bbox = extract_diffraction_roi(raw_image)
+            logger.info("ROI切り出し完了: %s, shape=%s", bbox, cropped_roi.shape)
 
-        # グレースケール化
-        if len(cropped_roi.shape) == 3:
-            gray_crop = cv2.cvtColor(cropped_roi, cv2.COLOR_BGR2GRAY)
-        else:
-            gray_crop = cropped_roi.copy()
+            # グレースケール化
+            if len(cropped_roi.shape) == 3:
+                gray_crop = cv2.cvtColor(cropped_roi, cv2.COLOR_BGR2GRAY)
+            else:
+                gray_crop = cropped_roi.copy()
 
-        # ステップ 3: 中心検出 & 半径計測
-        center_crop, r0, r_outer = detect_center_and_radius(gray_crop)
-        logger.info("中心検出: center=%s, r0=%.2f, r_outer=%.2f", center_crop, r0, r_outer)
+            # ステップ 3: 中心検出 & 半径計測
+            center_crop, r0, r_outer = detect_center_and_radius(gray_crop)
+            logger.info("中心検出: center=%s, r0=%.2f, r_outer=%.2f", center_crop, r0, r_outer)
 
-        # ステップ 4: 幾何規格化 (キャンバス中心への移動)
-        norm_img, norm_center = normalize_geometry(
-            gray_crop,
-            center=center_crop,
-            output_size=cfg.output_size,
-        )
-        norm_r0 = r0
-        norm_r_outer = r_outer
+            # ステップ 4: 幾何規格化 (キャンバス中心への移動)
+            norm_img, norm_center = normalize_geometry(
+                gray_crop,
+                center=center_crop,
+                output_size=cfg.output_size,
+            )
+            norm_r0 = r0
+            norm_r_outer = r_outer
 
-        # ステップ 5: 背景光除去
-        bg_subtracted = subtract_background(
-            norm_img,
-            method=cfg.bg_method,
-            kernel_size=cfg.bg_kernel_size,
-        )
+            # ステップ 5: 背景光除去
+            bg_subtracted = subtract_background(
+                norm_img,
+                method=cfg.bg_method,
+                kernel_size=cfg.bg_kernel_size,
+            )
 
-        # ステップ 6: 極座標展開 (r in [r_inner_ratio * r0, r_outer_ratio * r_outer])
-        # 低角ピーク救済 (r_inner を 1.035 * r0 へ拡大) および外周ピーク救済 (0.995 * r_outer)
-        r_inner = norm_r0 * cfg.r_inner_ratio
-        r_outer_crop = min(norm_r_outer * cfg.r_outer_ratio, (cfg.output_size / 2.0) - 2.0)
-        r_range = (float(r_inner), float(r_outer_crop))
+            # ステップ 6: 極座標展開 (r in [r_inner_ratio * r0, r_outer_ratio * r_outer])
+            # 低角ピーク救済 (r_inner を 1.035 * r0 へ拡大) および外周ピーク救済 (0.995 * r_outer)
+            r_inner = norm_r0 * cfg.r_inner_ratio
+            r_outer_crop = min(norm_r_outer * cfg.r_outer_ratio, (cfg.output_size / 2.0) - 2.0)
+            r_range = (float(r_inner), float(r_outer_crop))
 
-        polar_before = cartesian_to_polar(
-            bg_subtracted,
-            center=norm_center,
-            r_range=r_range,
-            n_r=cfg.n_r,
-            n_theta=cfg.n_theta,
-        )
+            polar_before = cartesian_to_polar(
+                bg_subtracted,
+                center=norm_center,
+                r_range=r_range,
+                n_r=cfg.n_r,
+                n_theta=cfg.n_theta,
+            )
 
-        # 内周境界のテーパー保護処理 (コサイン半テーパー / Tukey窓)
-        # ビームストッパー直近の低角ピークを保護しつつ、内周端の急峻なカットによる逆畳み込みリンギングを抑制
-        if cfg.taper_width > 0 and cfg.taper_width < cfg.n_r:
-            w_tap = cfg.taper_width
-            taper_curve = 0.5 * (1.0 - np.cos(np.pi * np.arange(w_tap, dtype=np.float32) / w_tap))
-            polar_before[:w_tap, :] *= taper_curve[:, None]
+            # 内周境界のテーパー保護処理 (コサイン半テーパー / Tukey窓)
+            if cfg.taper_width > 0 and cfg.taper_width < cfg.n_r:
+                w_tap = cfg.taper_width
+                taper_curve = 0.5 * (1.0 - np.cos(np.pi * np.arange(w_tap, dtype=np.float32) / w_tap))
+                polar_before[:w_tap, :] *= taper_curve[:, None]
 
         # ステップ 7: ブラー長推定 & PSF生成 (非対称アンサンブル高速同定対応)
         psf_meta: Dict[str, Any] = {}
@@ -491,6 +540,46 @@ class AstroLauePipeline:
                 physics_report=physics_report,
             )
 
+        # ステップ 14: 結晶主軸同定 & 2軸ゴニオメーター回転補正角 (Δθx, Δθy) の自動算出
+        alignment_res: Optional[LaueAlignmentResult] = None
+        alignment_fig_path: Optional[Path] = None
+        if cfg.run_alignment:
+            try:
+                align_cfg = cfg.alignment_config or LaueAlignmentConfig(
+                    camera_length_mm=slaue_raw.camera_length_mm if slaue_raw else 27.0,
+                    sign_y=-1 if slaue_raw else 1,
+                )
+                if slaue_raw is not None:
+                    # CSV 極座標の生物理座標から直接ピークを抽出して超高精度アライメント
+                    from scipy.ndimage import maximum_filter
+                    filt = maximum_filter(polar_after, size=(7, 15))
+                    is_peak = (polar_after == filt) & (polar_after > 0.15)
+                    r_idx, th_idx = np.where(is_peak)
+                    if len(r_idx) >= 3:
+                        pk_r_mm = slaue_raw.radii_mm[np.clip(r_idx, 0, len(slaue_raw.radii_mm) - 1)]
+                        pk_th_rad = np.radians(slaue_raw.thetas_deg[np.clip(th_idx, 0, len(slaue_raw.thetas_deg) - 1)])
+                        pk_int = polar_after[r_idx, th_idx]
+                        X_mm = pk_r_mm * np.cos(pk_th_rad)
+                        Y_mm = pk_r_mm * np.sin(pk_th_rad)
+                        spots_xy = np.column_stack([X_mm, Y_mm])
+                        alignment_res = solve_laue_alignment(spots_xy, intensities=pk_int, config=align_cfg)
+                else:
+                    # 直交復元画像からの自動アライメント
+                    alignment_res = solve_laue_alignment(restored_cart, config=align_cfg)
+
+                if alignment_res is not None:
+                    alignment_fig_path = cfg.output_dir / "alignment_diagnostics.png"
+                    plot_alignment_diagnostics(alignment_res, save_path=alignment_fig_path)
+                    best = alignment_res.best_candidate
+                    logger.info(
+                        "結晶主軸自動アライメント完了: 推奨補正角 Δθx=%+.2f°, Δθy=%+.2f° (全傾き角=%.2f°)",
+                        best.delta_theta_x_deg,
+                        best.delta_theta_y_deg,
+                        best.total_tilt_deg,
+                    )
+            except Exception as e_align:
+                logger.warning("ラウエ結晶主軸アライメント中に警告が発生しました: %s", e_align)
+
         logger.info("AstroLaue パイプライン処理が正常に完了しました。")
 
         return PipelineResult(
@@ -518,6 +607,8 @@ class AstroLauePipeline:
             physics_report=physics_report,
             residual_polar=residual_polar,
             psf_params=psf_meta,
+            alignment_result=alignment_res,
+            alignment_fig_path=alignment_fig_path,
         )
 
     def run_batch(
