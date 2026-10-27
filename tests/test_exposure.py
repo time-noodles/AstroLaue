@@ -48,8 +48,12 @@ def test_exposure_optimization_unsaturated():
     assert res.estimated_true_max == res.observed_max
     assert res.recommended_ratio > 1.0  # 延長推奨
     assert res.current_seconds == 120.0
+    assert res.single_exposure_seconds == 60.0
+    assert res.num_accumulations == 2
     assert res.recommended_seconds is not None
+    assert res.recommended_single_seconds is not None
     assert res.recommended_seconds > res.current_seconds
+    assert res.recommended_single_seconds > res.single_exposure_seconds
 
 
 def test_exposure_optimization_saturated():
@@ -69,8 +73,13 @@ def test_exposure_optimization_saturated():
     assert res.radial_integral > 1.0e7
     assert res.recommended_ratio < 1.0  # 短縮推奨
     assert res.current_seconds == 180.0
+    assert res.single_exposure_seconds == 60.0
+    assert res.num_accumulations == 3
     assert res.recommended_seconds is not None
+    assert res.recommended_single_seconds is not None
     assert res.recommended_seconds < res.current_seconds
+    assert res.recommended_single_seconds < res.single_exposure_seconds
+    assert abs(res.recommended_single_seconds * res.num_accumulations - res.recommended_seconds) < 1.0
 
 
 def test_exposure_section_formatting():
@@ -85,7 +94,8 @@ def test_exposure_section_formatting():
 
     assert "【⏱️ 露光時間最適化＆ピーク解析】" in sec_text
     assert "飽和検知" in sec_text or "上限到達" in sec_text
-    assert "推奨測定時間" in sec_text
+    assert "推奨設定 (案1)" in sec_text
+    assert "測定時間の設定" in sec_text
     assert "counts" in sec_text
 
 
@@ -165,3 +175,50 @@ def test_exposure_optimization_synthetic_multi_peak_screening():
     # より広い面積を持つ ピークB (r ≒ 30.0 mm) が最強ピークとして選ばれていること
     assert abs(res.peak_r_mm - 30.0) < 1.0
     assert abs(res.peak_theta_deg - 270.0) < 5.0
+
+
+def test_exposure_section_formatting_synthetic_branches():
+    """ASTSメタデータ不在時のフォールバック表示およびSLIGHTLY_HIGHメッセージの検証."""
+    sat_limit = 7.72e6
+    bg = 500000.0
+    r_grid, th_grid = np.meshgrid(np.linspace(5, 40, 50), np.linspace(0, 360, 100), indexing="ij")
+
+    # ASTS不在 (配列入力)
+    synth = bg + 2000000.0 * np.exp(-((r_grid - 20.0)**2 / (2 * 1.5**2) + (th_grid - 180.0)**2 / (2 * 5.0**2)))
+    res = analyze_exposure_and_optimize(synth, saturation_limit=sat_limit)
+    assert res.current_seconds is None
+    sec_text = res.format_section()
+    assert "設定変更を推奨" in sec_text
+    assert "現行の「測定時間」を" in sec_text
+
+    # SLIGHTLY_HIGH (飽和寸前: 88〜95%)
+    peak_gaussian = np.exp(-((r_grid - 20.0)**2 / (2 * 1.5**2) + (th_grid - 180.0)**2 / (2 * 5.0**2)))
+    synth_high = bg + (sat_limit * 0.91 - bg) * (peak_gaussian / peak_gaussian.max())
+    res_high = analyze_exposure_and_optimize(synth_high, saturation_limit=sat_limit)
+    assert res_high.status == SaturationStatus.SLIGHTLY_HIGH
+    sec_text_high = res_high.format_section()
+    assert "飽和マージンを確保" in sec_text_high
+
+
+def test_exposure_section_formatting_long_exposure_advice():
+    """推奨露光時間が600秒を超える場合の段階的延長アドバイス出力を検証."""
+    sat_limit = 7.72e6
+    res = ExposureOptimizationResult(
+        status=SaturationStatus.UNDER_EXPOSED,
+        observed_max=500000.0,
+        estimated_true_max=500000.0,
+        background=100000.0,
+        saturation_limit=sat_limit,
+        target_max=sat_limit * 0.80,
+        recommended_ratio=12.35,
+        peak_r_mm=20.0,
+        peak_theta_deg=180.0,
+        current_seconds=120.0,
+        single_exposure_seconds=60.0,
+        recommended_seconds=1482.0,  # 600秒超
+        recommended_single_seconds=741.0,
+        num_accumulations=2,
+    )
+    sec_text = res.format_section()
+    assert "総照射時間が10分を超えるため" in sec_text
+    assert "段階的な延長" in sec_text

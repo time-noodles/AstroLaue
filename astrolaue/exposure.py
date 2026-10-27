@@ -60,12 +60,6 @@ class ExposureOptimizationResult:
     target_max: float
     """目標最大強度 (上限の80%) [counts]."""
 
-    current_seconds: Optional[float]
-    """現行の測定時間 [秒] (.ASTS から取得、未取得時は None)."""
-
-    recommended_seconds: Optional[float]
-    """推奨測定時間 [秒] (現行測定時間が既知の場合)."""
-
     recommended_ratio: float
     """推奨スケーリング比率 (目標時間 / 現行時間). 1.0 未満は短縮、1.0 超は延長."""
 
@@ -74,6 +68,18 @@ class ExposureOptimizationResult:
 
     peak_theta_deg: float
     """最大ピークの方位角 [deg]."""
+
+    current_seconds: Optional[float] = None
+    """現行の総照射時間 [秒] (.ASTS から取得、未取得時は None)."""
+
+    single_exposure_seconds: Optional[float] = None
+    """現行の1回あたり測定時間 [秒] (例: 60.0秒)."""
+
+    recommended_seconds: Optional[float] = None
+    """推奨の総照射時間 [秒] (現行測定時間が既知の場合)."""
+
+    recommended_single_seconds: Optional[float] = None
+    """推奨の1回あたり測定時間 [秒] (案1: 積算回数を維持して1回時間を調整)."""
 
     num_accumulations: int = 1
     """現行の積算回数."""
@@ -126,30 +132,51 @@ class ExposureOptimizationResult:
             f"(デコンボリューション精度を最大化する安全最適値)"
         )
 
+        pct = self.recommended_ratio * 100.0
         if self.current_seconds is not None:
-            acc_str = f" ({self.num_accumulations}回積算)" if self.num_accumulations > 1 else ""
-            lines.append(f"  * 現行測定時間 (ASTS) : {self.current_seconds:.1f} 秒{acc_str}")
-            if self.recommended_seconds is not None:
+            if self.single_exposure_seconds is not None:
+                lines.append(
+                    f"  * 現行測定条件 (ASTS) : 測定時間 {self.single_exposure_seconds:.1f} 秒 "
+                    f"× {self.num_accumulations} 回積算 (総照射 {self.current_seconds:.1f} 秒)"
+                )
+            else:
+                acc_str = f" ({self.num_accumulations}回積算)" if self.num_accumulations > 1 else ""
+                lines.append(f"  * 現行測定時間 (ASTS) : {self.current_seconds:.1f} 秒{acc_str}")
+
+            if self.recommended_single_seconds is not None and self.recommended_seconds is not None:
+                lines.append("  * 【推奨設定 (案1)】  :")
+                lines.append(
+                    f"      >>> 測定時間の設定 : {self.recommended_single_seconds:.1f} 秒 "
+                    f"(積算回数は {self.num_accumulations} 回のまま維持、総照射 {self.recommended_seconds:.1f} 秒)"
+                )
+                lines.append(
+                    f"      >>> 設定推奨比率   : 現行測定時間の {pct:.0f}% に{advice_badge}"
+                )
+                if self.recommended_seconds > 600.0:
+                    lines.append(
+                        "      ※ 注: 総照射時間が10分を超えるため、まずは段階的な延長 (例: 測定時間 120秒〜180秒) での様子見を推奨します"
+                    )
+            elif self.recommended_seconds is not None:
                 lines.append("  * 【推奨測定時間】    :")
-                pct = self.recommended_ratio * 100.0
                 lines.append(
                     f"      >>> 目標露光時間   : {self.recommended_seconds:.1f} 秒 "
                     f"(現行の {pct:.0f}% に{advice_badge})"
                 )
         else:
-            lines.append("  * 【推奨露光倍率】    :")
-            pct = self.recommended_ratio * 100.0
+            lines.append("  * 【推奨設定 (案1)】  :")
             lines.append(
-                f"      >>> 設定推奨比率   : 現行測定時間の {pct:.0f}% "
-                f"({advice_badge})"
+                f"      >>> 測定時間の設定 : 現行の「測定時間」を {pct:.0f}% に設定変更を推奨 "
+                f"(積算回数は維持、{advice_badge})"
             )
 
         if self.status == SaturationStatus.SATURATED:
-            lines.append("  * 改善効果            : ピーク頭打ちによるリンギングを防止し、デブラー先鋭化を極限まで発揮")
+            lines.append("  * 改善効果            : 1回ごとの物理飽和とピーク頭打ちを防ぎ、デブラー先鋭化を極限まで発揮")
+        elif self.status == SaturationStatus.SLIGHTLY_HIGH:
+            lines.append("  * 改善効果            : 飽和マージンを確保し、測定強度の線形性とデブラー復元精度を担保")
         elif self.status == SaturationStatus.OPTIMAL:
             lines.append("  * 判定                : 現在の照射条件で最高のデブラー復元精度が得られています")
         elif self.status == SaturationStatus.UNDER_EXPOSED:
-            lines.append("  * 改善効果            : 照射時間を延長することで微弱ピークの検出感度と結晶軸同定精度が向上")
+            lines.append("  * 改善効果            : 1回あたりの照射時間を延長することで微弱ピークのS/N比が向上し、弱い回折斑点の検出感度が向上")
 
         lines.append("=" * 70)
         return "\n".join(lines)
@@ -287,17 +314,21 @@ def analyze_exposure_and_optimize(
     # 目標強度 (上限80%) / 推定真の最大強度
     rec_ratio = float(target_max / max(estimated_true_max, 1.0))
 
-    # 6. 現行測定時間 (.ASTS) の取得と推奨秒数の計算
+    # 6. 現行測定時間 (.ASTS) の取得と推奨秒数の計算 (案1: 1回あたりの測定時間を調整)
     curr_seconds: Optional[float] = None
+    curr_single: Optional[float] = None
     rec_seconds: Optional[float] = None
+    rec_single: Optional[float] = None
     num_acc = 1
 
     if csv_file is not None:
         meta = get_exposure_time_from_asts(csv_file)
         if meta is not None:
             curr_seconds = meta.total_seconds
+            curr_single = meta.single_exposure_seconds
             num_acc = meta.num_accumulations
             rec_seconds = max(1.0, round(curr_seconds * rec_ratio, 1))
+            rec_single = max(0.5, round(curr_single * rec_ratio, 1))
 
     return ExposureOptimizationResult(
         status=status,
@@ -307,7 +338,9 @@ def analyze_exposure_and_optimize(
         saturation_limit=saturation_limit,
         target_max=target_max,
         current_seconds=curr_seconds,
+        single_exposure_seconds=curr_single,
         recommended_seconds=rec_seconds,
+        recommended_single_seconds=rec_single,
         recommended_ratio=rec_ratio,
         peak_r_mm=peak_r,
         peak_theta_deg=peak_th,
