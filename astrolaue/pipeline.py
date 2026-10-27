@@ -20,6 +20,7 @@ import numpy as np
 
 from astrolaue.capture import load_image, capture_window, extract_diffraction_roi
 from astrolaue.io import load_slaue_csv, SlaueRawData
+from astrolaue.exposure import ExposureOptimizationResult, analyze_exposure_and_optimize
 from astrolaue.alignment import (
     solve_laue_alignment,
     LaueAlignmentConfig,
@@ -86,6 +87,9 @@ class PipelineConfig:
     export_comparison: bool = True
     run_alignment: bool = True
     alignment_config: Optional[LaueAlignmentConfig] = None
+    optimize_exposure: bool = True
+    saturation_limit: float = 7.72e6
+    target_exposure_ratio: float = 0.80
 
 
 @dataclass
@@ -118,6 +122,7 @@ class PipelineResult:
     psf_params: Optional[Dict[str, Any]] = None
     alignment_result: Optional[LaueAlignmentResult] = None
     alignment_fig_path: Optional[Path] = None
+    exposure_result: Optional[ExposureOptimizationResult] = None
 
 
 class AstroLauePipeline:
@@ -133,7 +138,7 @@ class AstroLauePipeline:
         live: bool = False,
         window_title: Optional[str] = None,
         target_mode: str = "auto",
-        on_alignment_ready: Optional[Callable[[LaueAlignmentResult], None]] = None,
+        on_alignment_ready: Optional[Callable[..., None]] = None,
     ) -> PipelineResult:
         """単一画像に対するパイプラインを実行します."""
         cfg = self.config
@@ -342,13 +347,41 @@ class AstroLauePipeline:
                         best.delta_theta_y_deg,
                         best.total_tilt_deg,
                     )
-                    if on_alignment_ready is not None:
-                        try:
-                            on_alignment_ready(alignment_res)
-                        except Exception as e_cb:
-                            logger.warning("on_alignment_ready コールバック中に例外: %s", e_cb)
+
             except Exception as e_align_fast:
                 logger.warning("高速アライメント計算中に警告: %s", e_align_fast)
+
+        # ステップ 8c: 【最優先高速実行】 ピーク飽和解析＆露光時間最適化
+        exposure_res: Optional[ExposureOptimizationResult] = None
+        if cfg.optimize_exposure and slaue_raw is not None:
+            try:
+                exposure_res = analyze_exposure_and_optimize(
+                    raw_data=slaue_raw,
+                    saturation_limit=cfg.saturation_limit,
+                    target_ratio=cfg.target_exposure_ratio,
+                    source_path=slaue_raw.file_path,
+                )
+                logger.info(
+                    "露光時間最適化解析完了: ステータス=%s, 観測Max=%.0f, 推定真Max=%.0f, 推奨比率=%.2f",
+                    exposure_res.status.value,
+                    exposure_res.observed_max,
+                    exposure_res.estimated_true_max,
+                    exposure_res.recommended_ratio,
+                )
+            except Exception as e_exp_fast:
+                logger.warning("露光時間最適化計算中に警告: %s", e_exp_fast)
+
+        # 速報コールバックの安全な実行 (アライメント & 露光最適化)
+        if alignment_res is not None and on_alignment_ready is not None:
+            try:
+                import inspect
+                sig = inspect.signature(on_alignment_ready)
+                if len(sig.parameters) >= 2:
+                    on_alignment_ready(alignment_res, exposure_res)
+                else:
+                    on_alignment_ready(alignment_res)
+            except Exception as e_cb:
+                logger.warning("on_alignment_ready コールバック中に例外: %s", e_cb)
 
         # ステップ 9: 直交座標系への逆極座標変換
         restored_cart = polar_to_cartesian(
@@ -592,7 +625,12 @@ class AstroLauePipeline:
                     alignment_res = solve_laue_alignment(restored_cart, config=align_cfg)
                     if alignment_res is not None and on_alignment_ready is not None:
                         try:
-                            on_alignment_ready(alignment_res)
+                            import inspect
+                            sig = inspect.signature(on_alignment_ready)
+                            if len(sig.parameters) >= 2:
+                                on_alignment_ready(alignment_res, exposure_res)
+                            else:
+                                on_alignment_ready(alignment_res)
                         except Exception as e_cb:
                             logger.warning("on_alignment_ready コールバック中に例外: %s", e_cb)
 
@@ -631,6 +669,7 @@ class AstroLauePipeline:
             psf_params=psf_meta,
             alignment_result=alignment_res,
             alignment_fig_path=alignment_fig_path,
+            exposure_result=exposure_res,
         )
 
     def run_batch(

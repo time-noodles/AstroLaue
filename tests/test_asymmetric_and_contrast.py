@@ -54,8 +54,8 @@ class TestAsymmetricPsfAndContrast:
         psf, params = estimate_asymmetric_psf_ensemble(polar_image=polar, model_type="auto", fallback_blur=15.0)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
-        # 計算時間は 25ms 以内（実測 ~8ms）
-        assert elapsed_ms < 25.0, f"アンサンブル同定が遅すぎます: {elapsed_ms:.2f} ms"
+        # 計算時間は実機負荷時でも 50ms 以内（実測 ~8-15ms）
+        assert elapsed_ms < 50.0, f"アンサンブル同定が遅すぎます: {elapsed_ms:.2f} ms"
         assert len(psf) > 0
         assert params.kernel_type in ["emg", "skew_normal"]
         assert params.r2_score >= 0.85, f"適合度が不十分です: R²={params.r2_score:.3f}"

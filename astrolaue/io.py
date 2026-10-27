@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import csv
 import logging
+import re
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List
 
 import numpy as np
 
@@ -147,3 +149,117 @@ def load_slaue_csv(csv_path: Union[str, Path]) -> SlaueRawData:
         camera_length_mm=cam_len,
         file_path=path,
     )
+
+
+@dataclass
+class ExposureMetadata:
+    """Rigaku sLaue 測定ログ (.ASTS) から取得された照射時間情報."""
+
+    total_seconds: float
+    """総照射時間 [秒] (積算がある場合は合計秒数)."""
+
+    single_exposure_seconds: float
+    """1回あたりの照射時間 [秒]."""
+
+    num_accumulations: int
+    """積算・照射回数."""
+
+    asts_path: Optional[Path] = None
+    """読み込み元 ASTS ファイルパス."""
+
+
+def get_exposure_time_from_asts(
+    path_or_csv: Union[str, Path]
+) -> Optional[ExposureMetadata]:
+    """同一フォルダの .ASTS ZIPアーカイブから X線照射時間 [秒] を高速に抽出します.
+
+    Args:
+        path_or_csv: .ASTS パス、または対応する .CSV パス
+
+    Returns:
+        ExposureMetadata オブジェクト。取得できなかった場合は None。
+    """
+    target = Path(path_or_csv)
+    asts_path: Optional[Path] = None
+
+    if target.suffix.lower() == ".asts" and target.is_file():
+        asts_path = target
+    elif target.suffix.lower() == ".csv":
+        candidate = target.with_suffix(".ASTS")
+        if candidate.is_file():
+            asts_path = candidate
+        else:
+            candidate_lower = target.with_suffix(".asts")
+            if candidate_lower.is_file():
+                asts_path = candidate_lower
+
+    if asts_path is None or not asts_path.is_file():
+        return None
+
+    if not zipfile.is_zipfile(asts_path):
+        return None
+
+    try:
+        with zipfile.ZipFile(asts_path, "r") as z:
+            names = z.namelist()
+            # 1. ResultLog.txt から 'X線照射 (○○秒)' を検索 (Shift-JIS / CP932)
+            if "ResultLog.txt" in names:
+                raw_bytes = z.read("ResultLog.txt")
+                for enc in ["cp932", "shift_jis", "utf-8"]:
+                    try:
+                        text = raw_bytes.decode(enc)
+                        matches = re.findall(r"X線照射 \(([0-9]+(?:\.[0-9]+)?)秒\)", text)
+                        if matches:
+                            durations = [float(m) for m in matches]
+                            tot_sec = sum(durations)
+                            single_sec = durations[0] if durations else tot_sec
+                            return ExposureMetadata(
+                                total_seconds=tot_sec,
+                                single_exposure_seconds=single_sec,
+                                num_accumulations=len(durations),
+                                asts_path=asts_path,
+                            )
+                    except UnicodeDecodeError:
+                        continue
+
+            # 2. MeasureCtrLog.txt からタイムスタンプ差分による照射時間を検索
+            if "MeasureCtrLog.txt" in names:
+                raw_bytes = z.read("MeasureCtrLog.txt")
+                for enc in ["cp932", "shift_jis", "utf-8"]:
+                    try:
+                        text = raw_bytes.decode(enc)
+                        start_matches = re.findall(
+                            r"(\d{2}:\d{2}:\d{2}) : CMeasExecIrradiationXray::Measure , Start",
+                            text,
+                        )
+                        end_matches = re.findall(
+                            r"(\d{2}:\d{2}:\d{2}) : CMeasExecIrradiationXray::Measure , End",
+                            text,
+                        )
+                        if start_matches and end_matches and len(start_matches) == len(end_matches):
+                            durations = []
+                            for st_str, ed_str in zip(start_matches, end_matches):
+                                try:
+                                    h1, m1, s1 = map(int, st_str.split(":"))
+                                    h2, m2, s2 = map(int, ed_str.split(":"))
+                                    diff = (h2 * 3600 + m2 * 60 + s2) - (h1 * 3600 + m1 * 60 + s1)
+                                    if diff < 0:
+                                        diff += 86400  # 日跨ぎ対応 (24時間加算)
+                                    if diff > 0:
+                                        durations.append(float(diff))
+                                except ValueError:
+                                    pass
+                            if durations:
+                                tot_sec = sum(durations)
+                                return ExposureMetadata(
+                                    total_seconds=tot_sec,
+                                    single_exposure_seconds=durations[0],
+                                    num_accumulations=len(durations),
+                                    asts_path=asts_path,
+                                )
+                    except UnicodeDecodeError:
+                        continue
+    except Exception as e_zip:
+        logger.debug("ASTS 露光時間パース中の例外: %s", e_zip)
+
+    return None

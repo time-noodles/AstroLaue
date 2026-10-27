@@ -178,6 +178,24 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Y軸回転の符号係数 (sLaue 実機ステージ整合: -1)",
     )
     parser.add_argument(
+        "--saturation-limit",
+        type=float,
+        default=7.72e6,
+        help="検出器の飽和カウント上限値 (デフォルト: 7,720,000 counts)",
+    )
+    parser.add_argument(
+        "--target-exposure-ratio",
+        type=float,
+        default=0.80,
+        help="露光最適化の目標飽和比率 (デフォルト: 0.80 = 上限80%)",
+    )
+    parser.add_argument(
+        "--no-optimize-exposure",
+        action="store_false",
+        dest="optimize_exposure",
+        help="露光時間最適化解析を無効化する",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -212,6 +230,9 @@ def main(args: list[str] | None = None) -> int:
         show_diagnostic=parsed.show_diagnostic,
         validate_physics=parsed.validate_physics,
         export_transparent=parsed.export_transparent,
+        optimize_exposure=getattr(parsed, "optimize_exposure", True),
+        saturation_limit=getattr(parsed, "saturation_limit", 7.72e6),
+        target_exposure_ratio=getattr(parsed, "target_exposure_ratio", 0.80),
     )
     pipeline = AstroLauePipeline(config)
 
@@ -396,6 +417,10 @@ def main(args: list[str] | None = None) -> int:
                 print(f"・アライメント診断図: {res.alignment_fig_path}")
         print("・クリップボード: 提出用透過PNGをクリップボードに自動格納しました")
         print("==========================================\n")
+
+        if res.exposure_result:
+            print(res.exposure_result.format_section() + "\n")
+
         return 0
     except Exception as e:
         logger.exception("パイプライン実行中にエラーが発生しました: %s", e)

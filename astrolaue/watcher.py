@@ -235,25 +235,36 @@ class ResidentWatcher:
                         except Exception:
                             pass
 
-            print("[1/2] 極座標生カウント読み込み & 超高速アライメント計算中...")
+            print("[1/2] 極座標生カウント読み込み & 超高速アライメント＆露光解析中...")
             t_start = time.time()
             alignment_done = False
 
-            def _on_fast_alignment(align_res) -> None:
+            def _on_fast_feedback(align_res, exp_res=None) -> None:
                 nonlocal alignment_done
                 elapsed = (time.time() - t_start) * 1000.0
                 best = align_res.best_candidate
                 align_text = f"Δθx = {best.delta_theta_x_deg:+.2f}°, Δθy = {best.delta_theta_y_deg:+.2f}°"
-                print("\n" + "=" * 60)
+
+                # セクション 1: 【結晶主軸アライメント】(独立表示)
+                print("\n" + "=" * 70)
                 print(f"【⚡ 結晶主軸アライメント速報 ({elapsed:.0f} ms)】")
-                print(f"  >>> 推奨ゴニオ補正角: {align_text} (全傾き角: {best.total_tilt_deg:.2f}°)")
+                print(f"  * 推定 (001) 主軸座標  : 検出器 (X = {best.detector_x_mm:+.2f} mm, Y = {best.detector_y_mm:+.2f} mm)")
+                print(f"  * 中心軸からの全傾き角 : ψ = {best.total_tilt_deg:.2f}°")
+                print("  * 【推奨ゴニオ補正角】 :")
+                print(f"      >>> Δθx (X軸回転) = {best.delta_theta_x_deg:+.2f}°")
+                print(f"      >>> Δθy (Y軸回転) = {best.delta_theta_y_deg:+.2f}°")
+                print(f"  * クリップボード       : 補正角度 ({align_text}) を転送完了")
+                print("=" * 70)
                 copy_text_to_clipboard(align_text)
-                print(f"      (補正角をクリップボードにコピーしました！)")
-                print("=" * 60 + "\n")
+
+                # セクション 2: 【露光時間最適化＆ピーク解析】(独立表示)
+                if exp_res is not None:
+                    print("\n" + exp_res.format_section() + "\n")
+
                 self._notify_sound(success=True)
                 alignment_done = True
 
-            result = self.pipeline.run(image_source=csv_path, on_alignment_ready=_on_fast_alignment)
+            result = self.pipeline.run(image_source=csv_path, on_alignment_ready=_on_fast_feedback)
 
             print("[2/2] 高解像度画像出力＆履歴保存完了!")
             print("-" * 60)
@@ -264,9 +275,15 @@ class ResidentWatcher:
             if result.alignment_result and not alignment_done:
                 best = result.alignment_result.best_candidate
                 align_text = f"Δθx = {best.delta_theta_x_deg:+.2f}°, Δθy = {best.delta_theta_y_deg:+.2f}°"
+                print("\n" + "=" * 70)
+                print("【結晶主軸アライメント結果】")
                 print(f"  * 【推奨ゴニオ補正角】: {align_text} (全傾き角: {best.total_tilt_deg:.2f}°)")
                 copy_text_to_clipboard(align_text)
                 print(f"    -> 補正角度 ({align_text}) をクリップボードにコピーしました！")
+                print("=" * 70)
+
+                if result.exposure_result:
+                    print("\n" + result.exposure_result.format_section())
 
             if result.spots:
                 reductions = [s.fwhm_reduction_ratio for s in result.spots if s.fwhm_before > 0]

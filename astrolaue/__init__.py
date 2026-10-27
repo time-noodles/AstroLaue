@@ -6,7 +6,8 @@
 """
 
 from astrolaue.capture import extract_diffraction_roi, load_image, capture_window
-from astrolaue.io import load_slaue_csv, SlaueRawData
+from astrolaue.io import load_slaue_csv, SlaueRawData, get_exposure_time_from_asts, ExposureMetadata
+from astrolaue.exposure import ExposureOptimizationResult, SaturationStatus, analyze_exposure_and_optimize
 from astrolaue.normalize import detect_center_and_radius, normalize_geometry, subtract_background
 from astrolaue.polar import cartesian_to_polar, polar_to_cartesian
 from astrolaue.deblur import (
@@ -88,5 +89,10 @@ __all__ = [
     "solve_laue_alignment",
     "plot_alignment_diagnostics",
     "generate_synthetic_laue_sample",
+    "ExposureOptimizationResult",
+    "SaturationStatus",
+    "analyze_exposure_and_optimize",
+    "get_exposure_time_from_asts",
+    "ExposureMetadata",
 ]
 
