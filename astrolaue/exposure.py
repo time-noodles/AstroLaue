@@ -134,39 +134,25 @@ class ExposureOptimizationResult:
 
         pct = self.recommended_ratio * 100.0
         if self.current_seconds is not None:
-            if self.single_exposure_seconds is not None:
-                lines.append(
-                    f"  * 現行測定条件 (ASTS) : 測定時間 {self.single_exposure_seconds:.1f} 秒 "
-                    f"× {self.num_accumulations} 回積算 (総照射 {self.current_seconds:.1f} 秒)"
-                )
-            else:
-                acc_str = f" ({self.num_accumulations}回積算)" if self.num_accumulations > 1 else ""
-                lines.append(f"  * 現行測定時間 (ASTS) : {self.current_seconds:.1f} 秒{acc_str}")
+            curr_show = self.single_exposure_seconds if self.single_exposure_seconds is not None else self.current_seconds
+            lines.append(f"  * 現行測定時間 (ASTS) : {curr_show:.1f} 秒")
 
-            if self.recommended_single_seconds is not None and self.recommended_seconds is not None:
-                lines.append("  * 【推奨設定 (案1)】  :")
-                lines.append(
-                    f"      >>> 測定時間の設定 : {self.recommended_single_seconds:.1f} 秒 "
-                    f"(積算回数は {self.num_accumulations} 回のまま維持、総照射 {self.recommended_seconds:.1f} 秒)"
-                )
-                lines.append(
-                    f"      >>> 設定推奨比率   : 現行測定時間の {pct:.0f}% に{advice_badge}"
-                )
-                if self.recommended_seconds > 600.0:
-                    lines.append(
-                        "      ※ 注: 総照射時間が10分を超えるため、まずは段階的な延長 (例: 測定時間 120秒〜180秒) での様子見を推奨します"
-                    )
-            elif self.recommended_seconds is not None:
+            target_show = self.recommended_single_seconds if self.recommended_single_seconds is not None else self.recommended_seconds
+            if target_show is not None:
                 lines.append("  * 【推奨測定時間】    :")
                 lines.append(
-                    f"      >>> 目標露光時間   : {self.recommended_seconds:.1f} 秒 "
+                    f"      >>> 測定時間の設定 : {target_show:.1f} 秒 "
                     f"(現行の {pct:.0f}% に{advice_badge})"
                 )
+                if target_show > 600.0:
+                    lines.append(
+                        "      ※ 注: 推奨時間が10分を超えるため、まずは段階的な延長 (例: 測定時間 120秒〜180秒) での様子見を推奨します"
+                    )
         else:
-            lines.append("  * 【推奨設定 (案1)】  :")
+            lines.append("  * 【推奨測定時間】    :")
             lines.append(
-                f"      >>> 測定時間の設定 : 現行の「測定時間」を {pct:.0f}% に設定変更を推奨 "
-                f"(積算回数は維持、{advice_badge})"
+                f"      >>> 測定時間の設定 : 現行設定の {pct:.0f}% に変更を推奨 "
+                f"({advice_badge})"
             )
 
         if self.status == SaturationStatus.SATURATED:

@@ -118,7 +118,7 @@ class ResidentWatcher:
         else:
             self.watch_dir = find_default_watch_dir()
 
-        self._seen_csv_files: set[str] = set()
+        self._seen_csv_files: dict[str, float] = {}
 
         # 結晶方位アライメント設定
         self.alignment_config = alignment_config or LaueAlignmentConfig(
@@ -195,19 +195,19 @@ class ResidentWatcher:
             # 成功通知音 (Windows)
             self._notify_sound(success=True)
 
-            print("\n>>> 次の操作を待機中... ([Enter]: 復元, [A]: 角度アライメント, [Q]: 終了) <<<")
+            print("\n>>> 次の操作を待機中... ([Enter]: 最新CSV再解析, [S]: 画面キャプチャ復元, [A]: 角度アライメント, [Q]: 終了) <<<", flush=True)
             return True
 
         except Exception as ex:
             import traceback
             tb_str = traceback.format_exc()
             logger.error("キャプチャ＆復元中にエラーが発生しました: %s\n%s", ex, tb_str)
-            print(f"\n[ERROR] 復元処理に失敗しました: {ex}")
+            print(f"\n[ERROR] 復元処理に失敗しました: {ex}", flush=True)
             tb_lines = [l for l in tb_str.strip().splitlines() if l.strip()]
             if len(tb_lines) > 1:
-                print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}")
+                print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}", flush=True)
             self._notify_sound(success=False)
-            print("\n>>> 待機中... ([Enter]: 復元, [A]: 角度アライメント) <<<")
+            print("\n>>> 待機中... ([Enter]: 最新CSV再解析, [S]: 画面キャプチャ復元, [A]: 角度アライメント) <<<", flush=True)
             return False
 
         finally:
@@ -216,7 +216,12 @@ class ResidentWatcher:
     def trigger_restore_from_csv(self, csv_path: Path) -> bool:
         """sLaue CSV生データから直接極座標復元＆結晶方位アライメントを自動実行します."""
         if not self._lock.acquire(blocking=False):
-            print(f"\n[!] 処理中のため、新着CSV ({csv_path.name}) の処理を保留します...")
+            print(f"\n[!] 処理中のため、新着CSV ({csv_path.name}) の処理を保留し次回ループで再試行します...", flush=True)
+            # ロック競合時は追跡リストから除外して次回ループで再検知可能にする
+            try:
+                self._seen_csv_files.pop(str(csv_path.resolve()), None)
+            except Exception:
+                pass
             return False
 
         try:
@@ -305,19 +310,19 @@ class ResidentWatcher:
 
             # 成功通知音
             self._notify_sound(success=True)
-            print("\n>>> 自動監視中... (新着CSVを常時待機 / [Enter]: キャプチャ復元, [Q]: 終了) <<<")
+            print("\n>>> 自動監視中... (新着CSV常時待機 / [Enter]: 最新CSV再解析, [S]: キャプチャ, [Q]: 終了) <<<", flush=True)
             return True
 
         except Exception as ex:
             import traceback
             tb_str = traceback.format_exc()
             logger.error("CSV復元中にエラーが発生しました: %s\n%s", ex, tb_str)
-            print(f"\n[ERROR] CSV復元処理に失敗しました: {ex}")
+            print(f"\n[ERROR] CSV復元処理に失敗しました: {ex}", flush=True)
             tb_lines = [l for l in tb_str.strip().splitlines() if l.strip()]
             if len(tb_lines) > 1:
-                print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}")
+                print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}", flush=True)
             self._notify_sound(success=False)
-            print("\n>>> 自動監視中... <<<")
+            print("\n>>> 自動監視中... (新着CSV常時待機 / [Enter]: 最新CSV再解析, [S]: キャプチャ) <<<", flush=True)
             return False
 
         finally:
@@ -391,38 +396,38 @@ class ResidentWatcher:
             # 成功通知音
             self._notify_sound(success=True)
 
-            print("\n>>> 次の操作を待機中... ([Enter]: 復元, [A]: 角度アライメント, [Q]: 終了) <<<")
+            print("\n>>> 次の操作を待機中... ([Enter]: 最新CSV再解析, [S]: 画面キャプチャ復元, [A]: 角度アライメント, [Q]: 終了) <<<", flush=True)
             return True
 
         except Exception as ex:
             import traceback
             tb_str = traceback.format_exc()
             logger.error("アライメント実行中にエラーが発生しました: %s\n%s", ex, tb_str)
-            print(f"\n[ERROR] アライメント処理に失敗しました: {ex}")
+            print(f"\n[ERROR] アライメント処理に失敗しました: {ex}", flush=True)
             tb_lines = [l for l in tb_str.strip().splitlines() if l.strip()]
             if len(tb_lines) > 1:
-                print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}")
+                print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}", flush=True)
             self._notify_sound(success=False)
-            print("\n>>> 待機中... ([Enter]: 復元, [A]: 角度アライメント) <<<")
+            print("\n>>> 待機中... ([Enter]: 最新CSV再解析, [S]: 画面キャプチャ復元, [A]: 角度アライメント) <<<", flush=True)
             return False
 
         finally:
             self._lock.release()
 
     def trigger_restore_latest_csv(self) -> bool:
-        """監視フォルダ内の最も新しいCSVファイルを再読み込みして復元を実行します."""
+        """監視フォルダ内 (サブフォルダ含む) の最も新しいCSVファイルを再読み込みして復元を実行します."""
         if not self.watch_dir or not self.watch_dir.is_dir():
-            print("\n[!] 監視フォルダが設定されていないため、最新CSVを取得できません。")
+            print("\n[!] 監視フォルダが設定されていないため、最新CSVを取得できません。", flush=True)
             return False
 
-        csv_files = list(self.watch_dir.glob("*.CSV")) + list(self.watch_dir.glob("*.csv"))
+        csv_files = [f for f in self.watch_dir.rglob("*.[cC][sS][vV]") if f.is_file()]
         if not csv_files:
-            print(f"\n[!] 監視フォルダ ({self.watch_dir}) 内に CSV ファイルが見つかりません。")
+            print(f"\n[!] 監視フォルダ ({self.watch_dir}) 内に CSV ファイルが見つかりません。", flush=True)
             return False
 
         csv_files.sort(key=lambda p: p.stat().st_mtime)
         latest_csv = csv_files[-1]
-        print(f"\n[*] 直近の測定CSV ({latest_csv.name}) を再解析します...")
+        print(f"\n[*] 直近の測定CSV ({latest_csv.name}) を再解析します...", flush=True)
         return self.trigger_restore_from_csv(latest_csv)
 
     def _notify_sound(self, success: bool = True) -> None:
@@ -446,39 +451,43 @@ class ResidentWatcher:
 
     def _print_help(self) -> None:
         """キー操作ヘルプを表示します."""
-        print("\n" + "=" * 65)
-        print("  【AstroLaue ライブ監視コマンド一覧】")
-        print("    ★ 常時自動監視 : 測定ソフトで測定完了 (.CSV 保存) 時に全自動復元＆角度推定")
-        print("    [C] + [Enter]   : 直近の最新測定 CSV を再解析・再復元")
-        print("    [Enter]         : 画面キャプチャによる即時手動復元 (表示中ウィンドウ)")
-        print("    [A] + [Enter]   : 画面キャプチャからの結晶主軸アライメント (高速角度推定)")
-        print("    [F9]  (Windows) : グローバルホットキー: 画面キャプチャ復元")
-        print("    [F10] (Windows) : グローバルホットキー: 結晶主軸アライメント")
-        print("    [H] + [Enter]   : このヘルプを表示")
-        print("    [Q] + [Enter]   : ライブ監視を終了")
-        print("=" * 65 + "\n")
+        print("\n" + "=" * 65, flush=True)
+        print("  【AstroLaue ライブ監視コマンド一覧】", flush=True)
+        print("    ★ 常時自動監視 : 測定ソフトで測定完了 (.CSV 保存) 時に全自動復元＆角度推定", flush=True)
+        print("    [Enter] / [C]   : 直近の最新測定 CSV を再解析・再復元", flush=True)
+        print("    [S] + [Enter]   : 画面キャプチャによる即時手動復元 (表示中ウィンドウ)", flush=True)
+        print("    [A] + [Enter]   : 画面キャプチャからの結晶主軸アライメント (高速角度推定)", flush=True)
+        print("    [F9]  (Windows) : グローバルホットキー: 画面キャプチャ復元", flush=True)
+        print("    [F10] (Windows) : グローバルホットキー: 結晶主軸アライメント", flush=True)
+        print("    [H] + [Enter]   : このヘルプを表示", flush=True)
+        print("    [Q] + [Enter]   : ライブ監視を終了", flush=True)
+        print("=" * 65 + "\n", flush=True)
 
     def run(self) -> None:
         """常駐監視ループを開始します."""
         self._running = True
+        try:
+            sys.stdout.reconfigure(line_buffering=True)
+        except Exception:
+            pass
 
-        print("=" * 65)
-        print("  AstroLaue: リアルタイム・ライブ監視モード (Live Watcher)")
-        print("=" * 65)
+        print("=" * 65, flush=True)
+        print("  AstroLaue: リアルタイム・ライブ監視モード (Live Watcher)", flush=True)
+        print("=" * 65, flush=True)
         if self.watch_dir and self.watch_dir.is_dir():
-            print(f"  * 【生データ常時監視】: {self.watch_dir.resolve()}")
-            print("    -> 測定ソフトで測定 (.CSV) が保存された瞬間に自動で完全復元＆角度推定！")
+            print(f"  * 【生データ常時監視】: {self.watch_dir.resolve()}", flush=True)
+            print("    -> サブフォルダ含む新着 .CSV 保存時に自動で完全復元＆角度推定！", flush=True)
         else:
-            print("  * (生データ自動監視フォルダ未設定: 手動キャプチャまたは --watch-dir で指定可能)")
-        print("  * 【コマンド操作】")
-        print("    - 自動監視   : 新着CSVファイルを常時バックグラウンド待機中")
-        print("    - [C] + Enter: 直近の最新測定 CSV を再解析・再復元")
-        print("    - [Enter]    : 画面キャプチャ即時復元 (特定アプリに依存せず自動切り出し)")
-        print("    - [A] + Enter: 画面キャプチャから結晶主軸アライメント")
-        print("    - [Q] + Enter: 終了")
-        print("  * 復元結果・アライメント診断図・透過PNGは results_live/ に自動保存されます。")
-        print("=" * 65)
-        print("\n待機中... (自動検知待機 / [C]: 最新CSV再解析, [Enter]: キャプチャ, [Q]: 終了)\n")
+            print("  * (生データ自動監視フォルダ未設定: 手動キャプチャまたは --watch-dir で指定可能)", flush=True)
+        print("  * 【コマンド操作】", flush=True)
+        print("    - 自動監視     : 新着CSVファイルを常時バックグラウンド待機中", flush=True)
+        print("    - [Enter] / [C]: 直近の最新測定 CSV を再解析・再復元", flush=True)
+        print("    - [S] + Enter  : 画面キャプチャ即時復元 (特定アプリに依存せず自動切り出し)", flush=True)
+        print("    - [A] + Enter  : 画面キャプチャから結晶主軸アライメント", flush=True)
+        print("    - [Q] + Enter  : 終了", flush=True)
+        print("  * 復元結果・アライメント診断図・透過PNGは results_live/ に自動保存されます。", flush=True)
+        print("=" * 65, flush=True)
+        print("\n待機中... (新着CSV常時自動待機 / [Enter]: 最新CSV再解析, [S]: キャプチャ, [Q]: 終了)\n", flush=True)
 
         # フォルダ監視スレッドを起動 (バックグラウンドで新着CSVを常時自動検知)
         dir_thread = None
@@ -498,35 +507,40 @@ class ResidentWatcher:
                 raw = input()
                 line = raw.strip().lower()
                 if line in ("q", "quit", "exit"):
-                    print("[*] 終了コマンドを受け付けました。常駐監視を終了します。")
+                    print("[*] 終了コマンドを受け付けました。常駐監視を終了します。", flush=True)
                     self._running = False
                     break
-                elif line in ("c", "csv", "latest", "re"):
-                    # 最新CSVを再処理
+                elif line in ("c", "csv", "latest", "re", ""):
+                    # 空Enter または [C] は最新CSVの再解析を実行 (誤って画面キャプチャを誤爆させない！)
+                    print("[*] 最新CSVの再解析を実行します...", flush=True)
                     self.trigger_restore_latest_csv()
+                elif line in ("s", "screen", "cap", "capture"):
+                    # [S] で手動画面キャプチャ復元
+                    self.trigger_capture_and_restore()
                 elif line in ("a", "align", "alignment", "gonio", "axis"):
                     # 結晶主軸アライメントを実行
                     self.trigger_crystal_alignment()
                 elif line in ("h", "help", "?"):
                     self._print_help()
                 else:
-                    # Enter押下で即時画面キャプチャ復元実行
-                    self.trigger_capture_and_restore()
+                    print(f"[*] 不明なコマンドです: '{line}'. [H] でヘルプを表示します。", flush=True)
         except (KeyboardInterrupt, EOFError):
-            print("\n[*] 常駐監視を終了します。")
+            print("\n[*] 常駐監視を終了します。", flush=True)
             self._running = False
 
     def _directory_watcher_loop(self) -> None:
-        """測定PCの生データフォルダ (例: Data/2610/) を監視し、新着CSVを検知したら即座に復元を実行します."""
+        """測定PCの生データフォルダ (サブフォルダ含む) を常時監視し、新着CSVを検知したら即座に復元を実行します."""
         if not self.watch_dir or not self.watch_dir.is_dir():
             return
 
-        # 起動時に既存のファイルを追跡登録
+        # 起動時に既存のファイルを追跡登録 (サブフォルダ含む)
         try:
-            for f in self.watch_dir.glob("*.CSV"):
-                self._seen_csv_files.add(f.name)
-            for f in self.watch_dir.glob("*.csv"):
-                self._seen_csv_files.add(f.name)
+            existing = [f for f in self.watch_dir.rglob("*.[cC][sS][vV]") if f.is_file()]
+            for f in existing:
+                try:
+                    self._seen_csv_files[str(f.resolve())] = f.stat().st_mtime
+                except Exception:
+                    pass
             logger.info("フォルダ監視初期化完了: %s (既存 %d ファイルを追跡)", self.watch_dir, len(self._seen_csv_files))
         except Exception as e_init:
             logger.warning("フォルダ監視初期化中に例外: %s", e_init)
@@ -534,20 +548,36 @@ class ResidentWatcher:
         while self._running:
             try:
                 if self.watch_dir.exists():
-                    current_csvs = list(self.watch_dir.glob("*.CSV")) + list(self.watch_dir.glob("*.csv"))
-                    new_files = [f for f in current_csvs if f.name not in self._seen_csv_files]
+                    current_csvs = [f for f in self.watch_dir.rglob("*.[cC][sS][vV]") if f.is_file()]
+                    new_candidates = []
+                    for f in current_csvs:
+                        f_key = str(f.resolve())
+                        try:
+                            mtime = f.stat().st_mtime
+                            if f_key not in self._seen_csv_files or mtime > (self._seen_csv_files[f_key] + 1.0):
+                                new_candidates.append((f, f_key, mtime))
+                        except Exception:
+                            pass
 
-                    if new_files:
-                        new_files.sort(key=lambda p: p.stat().st_mtime)
-                        for target_csv in new_files:
-                            # 測定ソフトのファイル書き込み完了を待機
-                            time.sleep(0.8)
-                            sz1 = target_csv.stat().st_size
-                            time.sleep(0.4)
-                            sz2 = target_csv.stat().st_size
-                            if sz1 == sz2 and sz1 > 1024:
-                                self._seen_csv_files.add(target_csv.name)
-                                # 別スレッドで自動復元を実行
+                    if new_candidates:
+                        new_candidates.sort(key=lambda item: item[2])
+                        for target_csv, f_key, mtime in new_candidates:
+                            # 測定ソフトのファイル書き込み完了を待機 (ファイルサイズが安定するまで)
+                            is_ready = False
+                            for _ in range(5):
+                                try:
+                                    sz1 = target_csv.stat().st_size
+                                    time.sleep(0.4)
+                                    sz2 = target_csv.stat().st_size
+                                    if sz1 == sz2 and sz1 > 1024:
+                                        is_ready = True
+                                        break
+                                except Exception:
+                                    time.sleep(0.4)
+
+                            if is_ready:
+                                self._seen_csv_files[f_key] = target_csv.stat().st_mtime
+                                print(f"\n[*] 新着CSVを検知しました: {target_csv.name} (自動解析を開始します...)", flush=True)
                                 threading.Thread(
                                     target=self.trigger_restore_from_csv,
                                     args=(target_csv,),

@@ -82,11 +82,12 @@ def plot_diagnostic_figure(
     method_name: str = "Richardson-Lucy",
     physics_report: Any | None = None,
     residual_polar: np.ndarray | None = None,
+    input_source_name: str | None = None,
 ) -> plt.Figure:
     """5つの診断要素および物理検証指標を集約して描画・保存します.
 
     Args:
-        cropped_orig: クロップされた元ROI画像
+        cropped_orig: クロップされた元ROI画像 (またはCSV展開画像)
         center_orig: クロップ画像上の中心座標 (xc, yc)
         r0: 中心白丸半径
         r_outer: 外周円盤半径
@@ -101,18 +102,20 @@ def plot_diagnostic_figure(
         method_name: 手法名
         physics_report: 物理妥当性検証レポートオブジェクト
         residual_polar: 残差極座標画像
+        input_source_name: 入力データソースの識別名 (例: "CSV: 261011_040502...CSV", "Screen Capture")
 
     Returns:
         fig: 作成された matplotlib Figure
     """
     fig = plt.figure(figsize=(16, 12), facecolor="#1e1e1e")
     
+    source_prefix = f"[{input_source_name}] " if input_source_name else ""
     title_suffix = ""
     if physics_report is not None:
         title_suffix = f" | Flux Ratio: {physics_report.mean_flux_ratio:.3f}, ΔCentroid: {physics_report.mean_centroid_shift_px:.2f}px"
 
     fig.suptitle(
-        f"AstroLaue Diagnostic Report | {method_name} (iter={num_iter}, L={blur_length:.1f}px){title_suffix}",
+        f"AstroLaue Diagnostic Report | {source_prefix}{method_name} (iter={num_iter}, L={blur_length:.1f}px){title_suffix}",
         fontsize=15,
         fontweight="bold",
         color="#ffffff",
@@ -134,7 +137,9 @@ def plot_diagnostic_figure(
     circle_outer = patches.Circle((xc, yc), r_outer, fill=False, edgecolor="yellow", linewidth=1.5, linestyle=":", label=f"Outer r={r_outer:.1f}px")
     ax1.add_patch(circle_inner)
     ax1.add_patch(circle_outer)
-    ax1.set_title("1. Cropped Original & Detected Center", color="#ffffff", fontsize=12, pad=6)
+
+    panel1_title = "1. Raw CSV Cartesian Unwrapped" if (input_source_name and "CSV" in input_source_name.upper()) else "1. Cropped Original & Detected Center"
+    ax1.set_title(panel1_title, color="#ffffff", fontsize=12, pad=6)
     ax1.legend(loc="upper right", facecolor="#2b2b2b", edgecolor="none", labelcolor="#e0e0e0", fontsize=9)
     ax1.tick_params(colors="#888888")
 

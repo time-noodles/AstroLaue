@@ -158,14 +158,25 @@ class AstroLauePipeline:
         # ステップ 1: 入力データ取得 (画像 または sLaue CSV 生データ)
         is_slaue_csv = False
         slaue_raw: Optional[SlaueRawData] = None
+        source_label = "Screen Capture"
 
         if isinstance(image_source, SlaueRawData):
             is_slaue_csv = True
             slaue_raw = image_source
+            source_file = getattr(slaue_raw, "file_path", None)
+            file_name = Path(source_file).stem if source_file else "Raw Data"
+            # 日本語や記号によるフォント警告を避けるためタイムスタンプ部を抽出
+            stem_clean = file_name.split("_コメント")[0] if "_コメント" in file_name else file_name
+            source_label = f"CSV: {stem_clean}.CSV"
         elif isinstance(image_source, (str, Path)) and str(image_source).lower().endswith(".csv"):
             is_slaue_csv = True
             logger.info("Rigaku sLaue CSV 生データを検出しました: %s", image_source)
             slaue_raw = load_slaue_csv(image_source)
+            file_name = Path(image_source).stem
+            stem_clean = file_name.split("_コメント")[0] if "_コメント" in file_name else file_name
+            source_label = f"CSV: {stem_clean}.CSV"
+        elif isinstance(image_source, (str, Path)):
+            source_label = f"Image: {Path(image_source).name}"
 
         if is_slaue_csv and slaue_raw is not None:
             # CSV 直接読み込みモード: 直交 -> 極座標変換を完全にスキップ
@@ -520,6 +531,7 @@ class AstroLauePipeline:
                 method_name=method_label,
                 physics_report=physics_report,
                 residual_polar=residual_polar,
+                input_source_name=source_label,
             )
 
         if cfg.save_intermediates:

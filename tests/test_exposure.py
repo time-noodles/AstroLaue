@@ -94,9 +94,12 @@ def test_exposure_section_formatting():
 
     assert "【⏱️ 露光時間最適化＆ピーク解析】" in sec_text
     assert "飽和検知" in sec_text or "上限到達" in sec_text
-    assert "推奨設定 (案1)" in sec_text
+    assert "推奨測定時間" in sec_text
     assert "測定時間の設定" in sec_text
     assert "counts" in sec_text
+    # 現場での誤解を防ぐため、積算回数や総照射時間の文言が含まれていないことを検証
+    assert "積算回数" not in sec_text
+    assert "総照射時間" not in sec_text
 
 
 def test_pipeline_exposure_integration():
@@ -188,8 +191,8 @@ def test_exposure_section_formatting_synthetic_branches():
     res = analyze_exposure_and_optimize(synth, saturation_limit=sat_limit)
     assert res.current_seconds is None
     sec_text = res.format_section()
-    assert "設定変更を推奨" in sec_text
-    assert "現行の「測定時間」を" in sec_text
+    assert "変更を推奨" in sec_text
+    assert "現行設定の" in sec_text
 
     # SLIGHTLY_HIGH (飽和寸前: 88〜95%)
     peak_gaussian = np.exp(-((r_grid - 20.0)**2 / (2 * 1.5**2) + (th_grid - 180.0)**2 / (2 * 5.0**2)))
@@ -220,5 +223,5 @@ def test_exposure_section_formatting_long_exposure_advice():
         num_accumulations=2,
     )
     sec_text = res.format_section()
-    assert "総照射時間が10分を超えるため" in sec_text
+    assert "推奨時間が10分を超えるため" in sec_text
     assert "段階的な延長" in sec_text
