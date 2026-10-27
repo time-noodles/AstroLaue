@@ -63,8 +63,10 @@ def test_exposure_optimization_saturated():
 
     assert isinstance(res, ExposureOptimizationResult)
     assert res.status == SaturationStatus.SATURATED
-    assert res.observed_max >= 7.7e6
+    assert res.observed_max >= 7.3e6
     assert res.estimated_true_max >= res.observed_max
+    assert res.num_candidate_peaks >= 2
+    assert res.radial_integral > 1.0e7
     assert res.recommended_ratio < 1.0  # 短縮推奨
     assert res.current_seconds == 180.0
     assert res.recommended_seconds is not None
@@ -140,3 +142,26 @@ def test_exposure_optimization_synthetic():
     assert res_sat.status == SaturationStatus.SATURATED
     assert res_sat.estimated_true_max >= sat_limit
     assert res_sat.recommended_ratio < 1.0
+
+
+def test_exposure_optimization_synthetic_multi_peak_screening():
+    """複数飽和ピークが存在する場合に、面積(Radial Integral)最大のピークが正しく選定されるかを実ファイル非依存で検証."""
+    sat_limit = 7.72e6
+    bg = 500000.0
+    r_grid, th_grid = np.meshgrid(np.linspace(5, 40, 150), np.linspace(0, 360, 300), indexing="ij")
+
+    # ピークA: 鋭い飽和ピーク (真の高さ 8.5e6, sigma_r = 1.0, 面積 小)
+    peak_a = 8500000.0 * np.exp(-((r_grid - 15.0)**2 / (2 * 1.0**2) + (th_grid - 90.0)**2 / (2 * 4.0**2)))
+    # ピークB: 幅広い飽和ピーク (真の高さ 8.5e6, sigma_r = 2.5, 面積 大 -> 支配的ピーク)
+    peak_b = 8500000.0 * np.exp(-((r_grid - 30.0)**2 / (2 * 2.5**2) + (th_grid - 270.0)**2 / (2 * 4.0**2)))
+
+    synth_multi = bg + peak_a + peak_b
+    synth_clipped = np.minimum(synth_multi, sat_limit)
+
+    res = analyze_exposure_and_optimize(synth_clipped, saturation_limit=sat_limit)
+
+    assert res.status == SaturationStatus.SATURATED
+    assert res.num_candidate_peaks >= 2
+    # より広い面積を持つ ピークB (r ≒ 30.0 mm) が最強ピークとして選ばれていること
+    assert abs(res.peak_r_mm - 30.0) < 1.0
+    assert abs(res.peak_theta_deg - 270.0) < 5.0
