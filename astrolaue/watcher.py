@@ -37,6 +37,25 @@ from astrolaue.clipboard import copy_image_to_clipboard, copy_text_to_clipboard
 logger = logging.getLogger(__name__)
 
 
+def disable_windows_quick_edit() -> None:
+    """Windows コンソールの QuickEdit モードを無効化し、マウスクリックによるフリーズを防止します."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        h_stdin = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE = -10
+        mode = ctypes.c_ulong()
+        if kernel32.GetConsoleMode(h_stdin, ctypes.byref(mode)):
+            ENABLE_QUICK_EDIT_MODE = 0x0040
+            ENABLE_EXTENDED_FLAGS = 0x0080
+            new_mode = (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS
+            kernel32.SetConsoleMode(h_stdin, new_mode)
+            logger.info("Windows コンソールの QuickEdit モードを無効化しました")
+    except Exception as e:
+        logger.debug("QuickEdit 無効化例外: %s", e)
+
+
 def find_default_watch_dir() -> Optional[Path]:
     """測定PC上の LaueCamera 生データ保存フォルダ (例: Data/2610) を自動探索します."""
     # 1. path.txt のチェック (作業ディレクトリ or share/slaue-data/)
@@ -466,6 +485,7 @@ class ResidentWatcher:
     def run(self) -> None:
         """常駐監視ループを開始します."""
         self._running = True
+        disable_windows_quick_edit()
         try:
             sys.stdout.reconfigure(line_buffering=True)
         except Exception:
