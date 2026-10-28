@@ -178,6 +178,18 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Y軸回転の符号係数 (sLaue 実機ステージ整合: -1)",
     )
     parser.add_argument(
+        "--gui",
+        action="store_true",
+        default=True,
+        help="最前面リアルタイム GUI HUD を表示する (デフォルト: True)",
+    )
+    parser.add_argument(
+        "--no-gui",
+        action="store_false",
+        dest="gui",
+        help="最前面 GUI HUD を無効化し、コンソールのみで動作する",
+    )
+    parser.add_argument(
         "--saturation-limit",
         type=float,
         default=7.72e6,
@@ -323,6 +335,7 @@ def main(args: list[str] | None = None) -> int:
             stage_order=getattr(parsed, "stage_order", "XY"),
             sign_x=getattr(parsed, "sign_x", 1),
             sign_y=getattr(parsed, "sign_y", -1),
+            use_gui=getattr(parsed, "gui", True),
         )
         watcher.run()
         return 0

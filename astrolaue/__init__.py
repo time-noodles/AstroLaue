@@ -23,6 +23,7 @@ from astrolaue.clipboard import copy_image_to_clipboard, copy_text_to_clipboard
 from astrolaue.visualize import plot_diagnostic_figure, plot_batch_summary_figure, plot_comparison_figure
 from astrolaue.pipeline import AstroLauePipeline, PipelineConfig, PipelineResult
 from astrolaue.watcher import ResidentWatcher
+from astrolaue.gui import AstroLaueHUD
 from astrolaue.alignment import (
     LaueAlignmentConfig,
     ZoneLine,
@@ -74,6 +75,7 @@ __all__ = [
     "PipelineConfig",
     "PipelineResult",
     "ResidentWatcher",
+    "AstroLaueHUD",
     "LaueAlignmentConfig",
     "ZoneLine",
     "AxisCandidate",

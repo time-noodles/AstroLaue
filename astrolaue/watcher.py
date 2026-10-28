@@ -117,6 +117,7 @@ class ResidentWatcher:
         sign_x: int = 1,
         sign_y: int = -1,
         alignment_config: Optional[LaueAlignmentConfig] = None,
+        use_gui: bool = True,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.config = config or PipelineConfig(output_dir=self.output_dir)
@@ -127,6 +128,8 @@ class ResidentWatcher:
         self.monitor_index = monitor_index
         self.target_mode = target_mode
         self.hotkey_name = hotkey_name
+        self.use_gui = use_gui
+        self.gui: Optional[Any] = None
         self._running = False
         self._is_processing = False
         self._lock = threading.Lock()
@@ -260,10 +263,15 @@ class ResidentWatcher:
                             pass
 
             print("[1/2] 極座標生カウント読み込み & 超高速アライメント＆露光解析中...")
+            if self.gui is not None:
+                self.gui.update_status(f"⚡ 解析中: {csv_path.name}", color="#ffd700", filename=csv_path.name)
             t_start = time.time()
             alignment_done = False
 
-            def _on_fast_feedback(align_res, exp_res=None) -> None:
+            def _on_fast_feedback(
+                align_res: LaueAlignmentResult,
+                exp_res: Optional[ExposureOptimizationResult] = None,
+            ) -> None:
                 nonlocal alignment_done
                 elapsed = (time.time() - t_start) * 1000.0
                 best = align_res.best_candidate
@@ -284,6 +292,12 @@ class ResidentWatcher:
                 # セクション 2: 【露光時間最適化＆ピーク解析】(独立表示)
                 if exp_res is not None:
                     print("\n" + exp_res.format_section() + "\n")
+
+                # 最前面 GUI HUD へのリアルタイム速報反映
+                if self.gui is not None:
+                    self.gui.update_alignment(align_res, source_name=csv_path.name)
+                    if exp_res is not None:
+                        self.gui.update_exposure(exp_res)
 
                 self._notify_sound(success=True)
                 alignment_done = True
@@ -329,6 +343,8 @@ class ResidentWatcher:
 
             # 成功通知音
             self._notify_sound(success=True)
+            if self.gui is not None:
+                self.gui.update_status("✅ 復元・アライメント完了", color="#69f0ae", filename=csv_path.name)
             print("\n>>> 自動監視中... (新着CSV常時待機 / [Enter]: 最新CSV再解析, [S]: キャプチャ, [Q]: 終了) <<<", flush=True)
             return True
 
@@ -341,6 +357,8 @@ class ResidentWatcher:
             if len(tb_lines) > 1:
                 print(f"  詳細: {tb_lines[-2]} -> {tb_lines[-1]}", flush=True)
             self._notify_sound(success=False)
+            if self.gui is not None:
+                self.gui.update_status(f"❌ 解析失敗: {ex}", color="#ff5252", filename=csv_path.name)
             print("\n>>> 自動監視中... (新着CSV常時待機 / [Enter]: 最新CSV再解析, [S]: キャプチャ) <<<", flush=True)
             return False
 
@@ -414,6 +432,8 @@ class ResidentWatcher:
 
             # 成功通知音
             self._notify_sound(success=True)
+            if self.gui is not None:
+                self.gui.update_alignment(res, source_name="Screen Capture")
 
             print("\n>>> 次の操作を待機中... ([Enter]: 最新CSV再解析, [S]: 画面キャプチャ復元, [A]: 角度アライメント, [Q]: 終了) <<<", flush=True)
             return True
@@ -482,6 +502,15 @@ class ResidentWatcher:
         print("    [Q] + [Enter]   : ライブ監視を終了", flush=True)
         print("=" * 65 + "\n", flush=True)
 
+    def stop(self) -> None:
+        """常駐監視を終了します."""
+        self._running = False
+        if self.gui is not None and getattr(self.gui, "root", None) is not None:
+            try:
+                self.gui.root.after(0, self.gui.root.destroy)
+            except Exception:
+                pass
+
     def run(self) -> None:
         """常駐監視ループを開始します."""
         self._running = True
@@ -521,14 +550,49 @@ class ResidentWatcher:
             hotkey_thread = threading.Thread(target=self._win32_hotkey_loop, daemon=True)
             hotkey_thread.start()
 
-        # メインスレッドではコンソール入力を待機
+        gui_started = False
+        if self.use_gui:
+            try:
+                from astrolaue.gui import AstroLaueHUD, TK_AVAILABLE
+                if TK_AVAILABLE:
+                    hud = AstroLaueHUD(
+                        on_reanalyze_latest=self.trigger_restore_latest_csv,
+                        on_capture_screen=self.trigger_capture_and_restore,
+                        on_close=self.stop,
+                        always_on_top=True,
+                    )
+                    # ウィンドウ作成を試行（DISPLAY環境変数がない等の場合はここでTclError）
+                    hud._init_window()
+                    self.gui = hud
+
+                    # GUI初期化成功後にコンソール入力を別スレッドで待機
+                    console_th = threading.Thread(target=self._console_input_loop, daemon=True)
+                    console_th.start()
+                    logger.info("最前面 GUI HUD を起動しました")
+                    gui_started = True
+                    hud.start_in_main_thread()
+            except Exception as e_gui:
+                logger.info("GUIの起動に失敗したため、コンソールモードで継続します: %s", e_gui)
+                self.gui = None
+                if not gui_started:
+                    self._console_input_loop()
+                else:
+                    while self._running:
+                        time.sleep(0.5)
+                return
+
+        if not gui_started:
+            self._console_input_loop()
+
+    def _console_input_loop(self) -> None:
+        """コンソール入力待機ループ."""
         try:
             while self._running:
                 raw = input()
                 line = raw.strip().lower()
                 if line in ("q", "quit", "exit"):
                     print("[*] 終了コマンドを受け付けました。常駐監視を終了します。", flush=True)
-                    self._running = False
+                    self.stop()
                     break
                 elif line in ("c", "csv", "latest", "re", ""):
                     # 空Enter または [C] は最新CSVの再解析を実行 (誤って画面キャプチャを誤爆させない！)
@@ -546,7 +610,7 @@ class ResidentWatcher:
                     print(f"[*] 不明なコマンドです: '{line}'. [H] でヘルプを表示します。", flush=True)
         except (KeyboardInterrupt, EOFError):
             print("\n[*] 常駐監視を終了します。", flush=True)
-            self._running = False
+            self.stop()
 
     def _directory_watcher_loop(self) -> None:
         """測定PCの生データフォルダ (サブフォルダ含む) を常時監視し、新着CSVを検知したら即座に復元を実行します."""
@@ -598,6 +662,8 @@ class ResidentWatcher:
                             if is_ready:
                                 self._seen_csv_files[f_key] = target_csv.stat().st_mtime
                                 print(f"\n[*] 新着CSVを検知しました: {target_csv.name} (自動解析を開始します...)", flush=True)
+                                if self.gui is not None:
+                                    self.gui.update_status(f"📥 新着検知: {target_csv.name}", color="#00e5ff", filename=target_csv.name)
                                 threading.Thread(
                                     target=self.trigger_restore_from_csv,
                                     args=(target_csv,),
