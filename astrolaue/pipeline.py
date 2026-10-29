@@ -90,6 +90,9 @@ class PipelineConfig:
     optimize_exposure: bool = True
     saturation_limit: float = 7.72e6
     target_exposure_ratio: float = 0.80
+    use_radial_bg: bool = True
+    radial_bg_quantile: float = 0.15
+    radial_bg_sigma: float = 5.0
 
 
 @dataclass
@@ -144,14 +147,39 @@ class AstroLauePipeline:
         cfg = self.config
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 出力ディレクトリ直下の既存成果物 (PNG, CSV等) を自動クリーンアップ (history/ は保護)
+        # 出力ディレクトリ直下の既存成果物を自動クリーンアップ (入力ファイルおよび raw データは保護)
+        input_file_resolved = Path(image_source).resolve() if isinstance(image_source, (str, Path)) else None
+        pipeline_artifact_names = {
+            "diagnostic_report.png",
+            "restored_contrast_optimized.png",
+            "restored_contrast_optimized_pseudo.png",
+            "restored_cartesian.png",
+            "restored_linear.png",
+            "restored_transparent.png",
+            "restored_transparent_16bit.png",
+            "restored_transparent_inverted.png",
+            "contrast_comparison.png",
+            "comparison_before_after.png",
+            "alignment_diagnostics.png",
+            "bg_removed.png",
+            "cropped_roi.png",
+            "normalized_canvas.png",
+            "polar_before.png",
+            "residual_polar.png",
+            "detected_spots.csv",
+        }
         try:
             for item in cfg.output_dir.iterdir():
-                if item.is_file() and item.suffix.lower() in [".png", ".csv", ".jpg"]:
-                    try:
-                        item.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                if item.is_file():
+                    if input_file_resolved and item.resolve() == input_file_resolved:
+                        continue
+                    if item.suffix.lower() in [".asts", ".lcsd"]:
+                        continue
+                    if item.name in pipeline_artifact_names:
+                        try:
+                            item.unlink(missing_ok=True)
+                        except Exception:
+                            pass
         except Exception as e_clean:
             logger.debug("出力ディレクトリの事前クリーンアップ中に例外: %s", e_clean)
 
@@ -181,7 +209,11 @@ class AstroLauePipeline:
         if is_slaue_csv and slaue_raw is not None:
             # CSV 直接読み込みモード: 直交 -> 極座標変換を完全にスキップ
             logger.info("極座標生カウントデータから直接復元パイプラインを実行します (補間ボケ・中心誤差ゼロ)")
-            polar_before = slaue_raw.to_normalized_polar()
+            polar_before = slaue_raw.to_normalized_polar(
+                use_radial_bg=cfg.use_radial_bg,
+                radial_bg_quantile=cfg.radial_bg_quantile,
+                radial_bg_sigma=cfg.radial_bg_sigma,
+            )
 
             # 直交座標表示・出力用の幾何パラメータ生成
             out_sz = cfg.output_size
@@ -269,6 +301,17 @@ class AstroLauePipeline:
                 w_tap = cfg.taper_width
                 taper_curve = 0.5 * (1.0 - np.cos(np.pi * np.arange(w_tap, dtype=np.float32) / w_tap))
                 polar_before[:w_tap, :] *= taper_curve[:, None]
+
+            # 動径背景減算 (画像キャプチャ時も動径勾配ノイズを除去)
+            if cfg.use_radial_bg:
+                from astrolaue.polar import subtract_radial_background
+                polar_before, _ = subtract_radial_background(
+                    polar_before,
+                    quantile=cfg.radial_bg_quantile,
+                    sigma=cfg.radial_bg_sigma,
+                )
+                if polar_before.max() > 0:
+                    polar_before = np.clip(polar_before / polar_before.max(), 0.0, 1.0)
 
         # ステップ 7: ブラー長推定 & PSF生成 (非対称アンサンブル高速同定対応)
         psf_meta: Dict[str, Any] = {}
@@ -492,16 +535,20 @@ class AstroLauePipeline:
 
             # 3並列比較図の生成 [元画像 | 線形復元 | コントラスト最適化]
             contrast_comparison_path = cfg.output_dir / "contrast_comparison.png"
-            img_lin = (
+            img_lin_read = (
                 cv2.imread(str(linear_png_path), cv2.IMREAD_GRAYSCALE)
                 if linear_png_path and linear_png_path.exists()
-                else norm_img
+                else None
             )
-            img_opt = (
+            img_lin = img_lin_read if img_lin_read is not None else norm_img
+
+            img_opt_read = (
                 cv2.imread(str(contrast_optimized_png_path), cv2.IMREAD_GRAYSCALE)
                 if contrast_optimized_png_path and contrast_optimized_png_path.exists()
-                else norm_img
+                else None
             )
+            img_opt = img_opt_read if img_opt_read is not None else norm_img
+
             export_three_way_comparison(
                 original_image=norm_img,
                 linear_image=img_lin,

@@ -45,14 +45,43 @@ class SlaueRawData:
     def to_normalized_polar(
         self,
         bg_percentile: float = 5.0,
-        high_percentile: float = 99.8,
+        high_percentile: Optional[float] = None,
+        use_radial_bg: bool = True,
+        radial_bg_quantile: float = 0.15,
+        radial_bg_sigma: float = 5.0,
     ) -> np.ndarray:
-        """背景減算およびロバストパーセンタイル正規化を施した極座標配列 (0.0〜1.0) を生成します."""
-        bg = float(np.percentile(self.polar_data, bg_percentile))
-        sub = np.maximum(self.polar_data - bg, 0.0)
-        p_hi = float(np.percentile(sub, high_percentile))
-        denom = max(p_hi, 1e-4)
-        norm = np.clip(sub / denom, 0.0, 1.0)
+        """背景減算および正規化を施した極座標配列 (0.0〜1.0) を生成します.
+
+        Args:
+            bg_percentile: use_radial_bg=False 時の全体スカラー背景パーセンタイル (デフォルト: 5.0)
+            high_percentile: 指定時はそのパーセンタイルでクリップ (None 時は物理最大値による線形正規化で台形化を防止)
+            use_radial_bg: 動径方向適応型背景減算を使用するか (デフォルト: True)
+            radial_bg_quantile: 動径背景推定の分位点 (デフォルト: 0.15)
+            radial_bg_sigma: 動径方向平滑化ガウシアンシグマ (デフォルト: 5.0)
+
+        Returns:
+            norm: 正規化極座標配列 (0.0〜1.0, float32)
+        """
+        if use_radial_bg:
+            from astrolaue.polar import subtract_radial_background
+            sub, _ = subtract_radial_background(
+                self.polar_data,
+                quantile=radial_bg_quantile,
+                sigma=radial_bg_sigma,
+            )
+        else:
+            bg = float(np.percentile(self.polar_data, bg_percentile))
+            sub = np.maximum(self.polar_data - bg, 0.0)
+
+        if high_percentile is not None:
+            p_hi = float(np.percentile(sub, high_percentile))
+            denom = max(p_hi, 1e-4)
+            norm = np.clip(sub / denom, 0.0, 1.0)
+        else:
+            max_val = float(sub.max())
+            denom = max(max_val, 1e-4)
+            norm = np.clip(sub / denom, 0.0, 1.0)
+
         return norm.astype(np.float32)
 
 

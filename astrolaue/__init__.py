@@ -9,7 +9,7 @@ from astrolaue.capture import extract_diffraction_roi, load_image, capture_windo
 from astrolaue.io import load_slaue_csv, SlaueRawData, get_exposure_time_from_asts, ExposureMetadata
 from astrolaue.exposure import ExposureOptimizationResult, SaturationStatus, analyze_exposure_and_optimize
 from astrolaue.normalize import detect_center_and_radius, normalize_geometry, subtract_background
-from astrolaue.polar import cartesian_to_polar, polar_to_cartesian
+from astrolaue.polar import cartesian_to_polar, polar_to_cartesian, subtract_radial_background
 from astrolaue.deblur import (
     estimate_blur_length,
     create_psf_1d,
@@ -55,6 +55,7 @@ __all__ = [
     "subtract_background",
     "cartesian_to_polar",
     "polar_to_cartesian",
+    "subtract_radial_background",
     "estimate_blur_length",
     "create_psf_1d",
     "richardson_lucy_circular",

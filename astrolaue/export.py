@@ -518,6 +518,8 @@ def export_three_way_comparison(
     for i, ax in enumerate(axes):
         ax.set_facecolor("#121212")
         img_show = imgs[i]
+        if img_show is None:
+            img_show = original_image
         if len(img_show.shape) == 3:
             ax.imshow(cv2.cvtColor(img_show, cv2.COLOR_BGR2RGB))
         else:

@@ -189,3 +189,45 @@ def remove_circular_padding(padded_polar: np.ndarray, pad_width: int) -> np.ndar
     if pad_width <= 0:
         return padded_polar
     return padded_polar[:, pad_width:-pad_width]
+
+
+def subtract_radial_background(
+    polar_data: np.ndarray,
+    quantile: float = 0.15,
+    sigma: float = 5.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """極座標データから動径方向の背景プロファイルをロバスト推定し減算します.
+
+    散乱幾何や空気散乱等に起因する動径方向の背景ノイズ勾配 B(r) を、
+    各半径行の方位角 (θ) 低位分位点から抽出し、1次元ガウシアン核で平滑化して減算します。
+    これにより、回折斑点の頂上強度を一切損なうことなく、中心から最外周まで均一な
+    ゼロベースラインを確立します。
+
+    Args:
+        polar_data: 極座標カウント配列。形状 (n_r, n_theta)
+        quantile: 各半径行で背景基準値を抽出する分位点 (デフォルト: 0.15)
+        sigma: 動径方向 (r軸) の1次元ガウシアン平滑化シグマ (デフォルト: 5.0)
+
+    Returns:
+        sub_data: 背景減算後の非負極座標配列 (n_r, n_theta)
+        bg_profile: 推定された平滑化動径背景プロファイル (n_r,)
+    """
+    from scipy.ndimage import gaussian_filter1d
+
+    p_data = np.asarray(polar_data, dtype=np.float32)
+    if p_data.ndim != 2:
+        raise ValueError(f"polar_data は2次元配列である必要があります: shape={p_data.shape}")
+
+    # 1. 各半径行 r について θ 軸の低位分位点 (15%点) を算出
+    q_val = float(np.clip(quantile * 100.0, 0.0, 100.0))
+    bg_raw = np.percentile(p_data, q_val, axis=1)
+
+    # 2. 動径方向の1次元ガウシアン平滑化 (サンプリングノイズ除去)
+    if sigma > 0.0 and len(bg_raw) > 3:
+        bg_smooth = gaussian_filter1d(bg_raw, sigma=sigma, mode="nearest")
+    else:
+        bg_smooth = bg_raw.copy()
+
+    # 3. 各ピクセルから対応する半径の背景を減算し非負クランプ
+    sub_data = np.maximum(p_data - bg_smooth[:, None], 0.0)
+    return sub_data, bg_smooth
