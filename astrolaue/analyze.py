@@ -291,6 +291,7 @@ def analyze_diffraction_spots(
     threshold: Optional[float] = None,
     max_spots: int = 150,
     window_theta_pix: int = 35,
+    theta_offset_deg: float = 0.0,
 ) -> Tuple[List[SpotResult], Dict[str, Any]]:
     """検出された全スポットの解析および代表スポットの復元前後プロファイル比較データを抽出します.
 
@@ -341,13 +342,18 @@ def analyze_diffraction_spots(
         dx = sx - xc
         dy = sy - yc
         r = float(np.hypot(dx, dy))
-        theta = float(np.arctan2(dy, dx))
-        if theta < 0:
-            theta += 2.0 * np.pi
+        phi = float(np.arctan2(dy, dx))
+        if phi < 0:
+            phi += 2.0 * np.pi
 
-        # 極座標インデックスへ変換
+        # 極座標インデックスへ変換 (theta_offset_deg 考慮)
+        if theta_offset_deg != 0.0:
+            theta_pol = float(np.mod(phi - np.radians(theta_offset_deg), 2.0 * np.pi))
+        else:
+            theta_pol = phi
+
         r_idx = int(np.clip(round((r - r_min) / (r_max - r_min) * (n_r - 1)), 0, n_r - 1))
-        th_idx = int(np.clip(round((theta / (2.0 * np.pi)) * n_theta), 0, n_theta - 1))
+        th_idx = int(np.clip(round((theta_pol / (2.0 * np.pi)) * n_theta), 0, n_theta - 1))
 
         # theta 軸のプロファイル窓を抽出 (循環境界対応)
         half_w = window_theta_pix // 2
@@ -393,8 +399,8 @@ def analyze_diffraction_spots(
             x=sx,
             y=sy,
             r=r,
-            theta_rad=theta,
-            theta_deg=float(np.degrees(theta)),
+            theta_rad=theta_pol,
+            theta_deg=float(np.degrees(theta_pol)),
             peak_intensity=peak_val,
             integrated_intensity=integrated_val,
             fwhm_before=fwhm_b,

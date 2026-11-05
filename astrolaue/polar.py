@@ -22,6 +22,7 @@ def cartesian_to_polar(
     n_r: int = 512,
     n_theta: int = 1440,
     pad_angle_pix: int = 0,
+    theta_offset_deg: float = 0.0,
 ) -> np.ndarray:
     """直交座標系 (x, y) の画像を極座標系 (r, theta) へ展開します.
 
@@ -37,6 +38,7 @@ def cartesian_to_polar(
         n_r: 動径方向のサンプリング点数 (行数)
         n_theta: 方位角方向のサンプリング点数 (列数)
         pad_angle_pix: 角度方向に付与する循環パディング幅 (ピクセル)
+        theta_offset_deg: 極座標 theta=0° が対応する直交画像上の角度オフセット [deg] (時計回り正)
 
     Returns:
         polar_image: 極座標展開画像。形状 (n_r, n_theta + 2 * pad_angle_pix)
@@ -55,6 +57,9 @@ def cartesian_to_polar(
         theta_all = np.concatenate([left_theta, theta_vals, right_theta])
     else:
         theta_all = theta_vals
+
+    if theta_offset_deg != 0.0:
+        theta_all = theta_all + np.radians(theta_offset_deg)
 
     R, Theta = np.meshgrid(r_vals, theta_all, indexing="ij")
     map_x = xc + R * np.cos(Theta)
@@ -81,6 +86,7 @@ def polar_to_cartesian(
     center: Tuple[float, float],
     r_range: Tuple[float, float],
     pad_angle_pix: int = 0,
+    theta_offset_deg: float = 0.0,
 ) -> np.ndarray:
     """極座標系 (r, theta) の画像を直交座標系 (x, y) へ逆変換します.
 
@@ -94,6 +100,7 @@ def polar_to_cartesian(
         center: 出力画像上の中心座標 (xc, yc)
         r_range: (r_min, r_max) 半径範囲
         pad_angle_pix: 極座標画像に含まれる角度方向の循環パディング幅
+        theta_offset_deg: 角度オフセット [deg]。極座標 theta=0° を直交画像上の特定方位へ一致させる (デフォルト: 0.0, 装置GUI12時方向整合時は -90.0)
 
     Returns:
         cartesian_image: 逆変換された直交座標画像 (H, W)
@@ -123,7 +130,11 @@ def polar_to_cartesian(
     dy = y_indices - yc
 
     r_grid = np.hypot(dx, dy)
-    theta_grid = np.arctan2(dy, dx)
+    phi_grid = np.arctan2(dy, dx)
+    if theta_offset_deg != 0.0:
+        theta_grid = phi_grid - np.radians(theta_offset_deg)
+    else:
+        theta_grid = phi_grid
     # theta を [0, 2*pi) の範囲へ正規化
     theta_grid = np.mod(theta_grid, 2.0 * np.pi)
 

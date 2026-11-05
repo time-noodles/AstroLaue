@@ -208,6 +208,12 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="露光時間最適化解析を無効化する",
     )
     parser.add_argument(
+        "--theta-offset",
+        type=float,
+        default=-90.0,
+        help="直交画像展開時の角度オフセット [deg] (デフォルト: -90.0, 装置GUI12時方向整合)",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -245,6 +251,7 @@ def main(args: list[str] | None = None) -> int:
         optimize_exposure=getattr(parsed, "optimize_exposure", True),
         saturation_limit=getattr(parsed, "saturation_limit", 7.72e6),
         target_exposure_ratio=getattr(parsed, "target_exposure_ratio", 0.80),
+        theta_offset_deg=getattr(parsed, "theta_offset", -90.0),
     )
     pipeline = AstroLauePipeline(config)
 

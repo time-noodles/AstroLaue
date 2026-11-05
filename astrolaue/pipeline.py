@@ -93,6 +93,7 @@ class PipelineConfig:
     use_radial_bg: bool = True
     radial_bg_quantile: float = 0.15
     radial_bg_sigma: float = 5.0
+    theta_offset_deg: float = -90.0
 
 
 @dataclass
@@ -230,6 +231,7 @@ class AstroLauePipeline:
                 output_shape=(out_sz, out_sz),
                 center=norm_center,
                 r_range=r_range,
+                theta_offset_deg=cfg.theta_offset_deg,
             )
             bg_subtracted = norm_img
             cropped_roi = norm_img
@@ -294,6 +296,7 @@ class AstroLauePipeline:
                 r_range=r_range,
                 n_r=cfg.n_r,
                 n_theta=cfg.n_theta,
+                theta_offset_deg=cfg.theta_offset_deg,
             )
 
             # 内周境界のテーパー保護処理 (コサイン半テーパー / Tukey窓)
@@ -388,8 +391,8 @@ class AstroLauePipeline:
                     pk_r_mm = slaue_raw.radii_mm[np.clip(r_idx, 0, len(slaue_raw.radii_mm) - 1)]
                     pk_th_rad = np.radians(slaue_raw.thetas_deg[np.clip(th_idx, 0, len(slaue_raw.thetas_deg) - 1)])
                     pk_int = polar_after[r_idx, th_idx]
-                    X_mm = pk_r_mm * np.cos(pk_th_rad)
-                    Y_mm = pk_r_mm * np.sin(pk_th_rad)
+                    X_mm = pk_r_mm * np.sin(pk_th_rad)
+                    Y_mm = pk_r_mm * np.cos(pk_th_rad)
                     spots_xy = np.column_stack([X_mm, Y_mm])
                     alignment_res = solve_laue_alignment(spots_xy, intensities=pk_int, config=align_cfg)
 
@@ -443,6 +446,7 @@ class AstroLauePipeline:
             output_shape=(cfg.output_size, cfg.output_size),
             center=norm_center,
             r_range=r_range,
+            theta_offset_deg=cfg.theta_offset_deg,
         )
 
         # ステップ 10: スポット検出 & FWHM・強度解析
@@ -457,6 +461,7 @@ class AstroLauePipeline:
             max_sigma=cfg.spot_max_sigma,
             threshold=cfg.spot_threshold,
             max_spots=cfg.spot_max_spots,
+            theta_offset_deg=cfg.theta_offset_deg,
         )
 
         # ステップ 11: 課題 1 物理妥当性の検証
