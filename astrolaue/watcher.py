@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
 import shutil
 
 from astrolaue.capture import capture_window
@@ -56,8 +56,35 @@ def disable_windows_quick_edit() -> None:
         logger.debug("QuickEdit 無効化例外: %s", e)
 
 
+def resolve_watch_dir(dir_path: Optional[Path | str]) -> Optional[Path]:
+    """監視対象フォルダを正規化します.
+
+    指定されたフォルダが年月サブフォルダ (例: Data/2610, Data/2611 等) の場合、
+    親の Data フォルダを監視ルートとして返します。
+    これにより、月が替わって新しい年月フォルダ (2611, 2612 等) が自動作成されても、
+    親フォルダの再帰監視 (rglob) によって全サブフォルダの新着CSVが自動検知されます。
+    """
+    if dir_path is None:
+        return None
+    p = Path(dir_path)
+
+    # 末尾のフォルダ名が数字4〜8桁（例: 2610, 2611, 202611, 20261028 等）の場合
+    name = p.name
+    if name.isdigit() and len(name) in (4, 6, 8):
+        parent = p.parent
+        if parent.is_dir():
+            logger.info(
+                "年月サブフォルダ (%s) が指定されたため、親フォルダ (%s) を監視ルートに設定しました (月替わり全自動追跡)",
+                name,
+                parent,
+            )
+            return parent
+
+    return p
+
+
 def find_default_watch_dir() -> Optional[Path]:
-    """測定PC上の LaueCamera 生データ保存フォルダ (例: Data/2610) を自動探索します."""
+    """測定PC上の LaueCamera 生データ保存フォルダ (例: Data) を自動探索します."""
     # 1. path.txt のチェック (作業ディレクトリ or share/slaue-data/)
     for cand in [Path("path.txt"), Path("share/slaue-data/path.txt")]:
         if cand.is_file():
@@ -66,12 +93,14 @@ def find_default_watch_dir() -> Optional[Path]:
                 if line:
                     p = Path(line)
                     if p.is_dir():
-                        return p
+                        return resolve_watch_dir(p)
                     # Windowsパスが書かれている場合
                     if "\\" in line:
                         p_win = Path(line.replace("\\", "/"))
                         if p_win.is_dir():
-                            return p_win
+                            return resolve_watch_dir(p_win)
+                    if p.parent.is_dir():
+                        return resolve_watch_dir(p.parent)
             except Exception:
                 pass
 
@@ -82,18 +111,16 @@ def find_default_watch_dir() -> Optional[Path]:
         if user_profile:
             candidates_base.append(Path(user_profile) / "Documents" / "LaueCamera" / "Data")
             candidates_base.append(Path(user_profile) / "Documents" / "u-X360" / "Data")
+            candidates_base.append(Path(user_profile) / "Documents" / "LaueCamera")
     home = Path.home()
     candidates_base.append(home / "Documents" / "LaueCamera" / "Data")
     candidates_base.append(home / "Documents" / "u-X360" / "Data")
+    candidates_base.append(home / "Documents" / "LaueCamera")
     candidates_base.append(Path("share/slaue-data"))
 
     for base in candidates_base:
         if base.is_dir():
-            # 年月フォルダ (例: 2610, 2609...) のうち最新のものを探索
-            subdirs = [d for d in base.iterdir() if d.is_dir() and d.name.isdigit()]
-            if subdirs:
-                subdirs.sort(key=lambda d: d.name)
-                return subdirs[-1]
+            # 親ディレクトリ (Data) そのものを返すことで、2610, 2611 等の全年月サブフォルダを網羅
             return base
 
     return None
@@ -136,7 +163,7 @@ class ResidentWatcher:
 
         # 監視対象フォルダの初期化
         if watch_dir:
-            self.watch_dir = Path(watch_dir)
+            self.watch_dir = resolve_watch_dir(watch_dir)
         else:
             self.watch_dir = find_default_watch_dir()
 
@@ -466,7 +493,8 @@ class ResidentWatcher:
 
         csv_files.sort(key=lambda p: p.stat().st_mtime)
         latest_csv = csv_files[-1]
-        print(f"\n[*] 直近の測定CSV ({latest_csv.name}) を再解析します...", flush=True)
+        folder_info = f" [フォルダ: {latest_csv.parent.name}]" if latest_csv.parent != self.watch_dir else ""
+        print(f"\n[*] 直近の測定CSV ({latest_csv.name}){folder_info} を再解析します...", flush=True)
         return self.trigger_restore_from_csv(latest_csv)
 
     def _notify_sound(self, success: bool = True) -> None:
@@ -525,6 +553,12 @@ class ResidentWatcher:
         print("=" * 65, flush=True)
         if self.watch_dir and self.watch_dir.is_dir():
             print(f"  * 【生データ常時監視】: {self.watch_dir.resolve()}", flush=True)
+            try:
+                subdirs = [d.name for d in self.watch_dir.iterdir() if d.is_dir()]
+                if subdirs:
+                    print(f"    -> 検出された年月/ロットサブフォルダ: {', '.join(sorted(subdirs)[-6:])} (月替わり全自動追跡)", flush=True)
+            except Exception:
+                pass
             print("    -> サブフォルダ含む新着 .CSV 保存時に自動で完全復元＆角度推定！", flush=True)
         else:
             print("  * (生データ自動監視フォルダ未設定: 手動キャプチャまたは --watch-dir で指定可能)", flush=True)
