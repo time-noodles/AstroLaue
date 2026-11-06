@@ -373,27 +373,61 @@ class AstroLauePipeline:
         else:
             raise ValueError(f"未知の復元手法です: {cfg.method}")
 
-        # ステップ 8b: 【最優先高速実行】 結晶主軸同定 & ゴニオ補正角 (Δθx, Δθy) 推定
+        # ステップ 8b: 【最優先高速実行】 逆畳み込み結果を利用した結晶主軸同定 & ゴニオ補正角 (Δθx, Δθy) 推定
         # 重い直交変換やPNG保存・グラフ描画を待たずに即座に計算し、速報通知を行います
         alignment_res: Optional[LaueAlignmentResult] = None
         alignment_fig_path: Optional[Path] = None
-        if cfg.run_alignment and slaue_raw is not None:
+        if cfg.run_alignment:
             try:
+                cam_len = slaue_raw.camera_length_mm if slaue_raw is not None else 27.0
+                sign_y_val = -1 if slaue_raw is not None else 1
                 align_cfg = cfg.alignment_config or LaueAlignmentConfig(
-                    camera_length_mm=slaue_raw.camera_length_mm,
-                    sign_y=-1,
+                    camera_length_mm=cam_len,
+                    sign_y=sign_y_val,
                 )
                 from scipy.ndimage import maximum_filter
-                filt = maximum_filter(polar_after, size=(7, 15))
-                is_peak = (polar_after == filt) & (polar_after > 0.15)
+                # 動径方向は reflect, 方位角方向 (θ) は 360° 循環 wrap モードで極大値探索
+                filt = maximum_filter(polar_after, size=(7, 15), mode=["reflect", "wrap"])
+
+                # 逆畳み込み後画像における適応型ノイズフロア・ピーク閾値算定 (弱強度サンプル対応)
+                med_a = float(np.median(polar_after))
+                low_a = polar_after[polar_after < np.percentile(polar_after, 70)]
+                std_a = float(np.std(low_a)) if len(low_a) > 0 else 0.01
+                adapt_thresh = max(med_a + 3.0 * std_a, 0.02)
+
+                is_peak = (polar_after == filt) & (polar_after > adapt_thresh)
                 r_idx, th_idx = np.where(is_peak)
+
+                # ピーク数が少ない場合のフォールバック緩和
+                if len(r_idx) < 4:
+                    fallback_thresh = max(med_a + 1.5 * std_a, 0.01)
+                    is_peak_fb = (polar_after == filt) & (polar_after > fallback_thresh)
+                    r_idx, th_idx = np.where(is_peak_fb)
+
+                # 候補が多い場合は強度上位に絞り込んで計算速度と晶帯フィッティング精度を両立
+                if len(r_idx) > 85:
+                    top_sel = np.argsort(-polar_after[r_idx, th_idx])[:85]
+                    r_idx, th_idx = r_idx[top_sel], th_idx[top_sel]
+
                 if len(r_idx) >= 3:
-                    pk_r_mm = slaue_raw.radii_mm[np.clip(r_idx, 0, len(slaue_raw.radii_mm) - 1)]
-                    pk_th_rad = np.radians(slaue_raw.thetas_deg[np.clip(th_idx, 0, len(slaue_raw.thetas_deg) - 1)])
-                    pk_int = polar_after[r_idx, th_idx]
-                    X_mm = pk_r_mm * np.sin(pk_th_rad)
-                    Y_mm = pk_r_mm * np.cos(pk_th_rad)
-                    spots_xy = np.column_stack([X_mm, Y_mm])
+                    if slaue_raw is not None:
+                        pk_r_mm = slaue_raw.radii_mm[np.clip(r_idx, 0, len(slaue_raw.radii_mm) - 1)]
+                        pk_th_rad = np.radians(slaue_raw.thetas_deg[np.clip(th_idx, 0, len(slaue_raw.thetas_deg) - 1)])
+                        pk_int = polar_after[r_idx, th_idx]
+                        X_mm = pk_r_mm * np.sin(pk_th_rad)
+                        Y_mm = pk_r_mm * np.cos(pk_th_rad)
+                        spots_xy = np.column_stack([X_mm, Y_mm])
+                    else:
+                        # 画像入力時: 極座標インデックスから物理座標 [mm] を換算
+                        r_min_pix, r_max_pix = r_range
+                        pix_size = align_cfg.pixel_size_mm
+                        r_mm = (r_min_pix + (r_idx / max(cfg.n_r - 1, 1)) * (r_max_pix - r_min_pix)) * pix_size
+                        th_rad = (th_idx / max(cfg.n_theta, 1)) * 2.0 * np.pi + np.radians(cfg.theta_offset_deg)
+                        pk_int = polar_after[r_idx, th_idx]
+                        X_mm = r_mm * np.cos(th_rad)
+                        Y_mm = -r_mm * np.sin(th_rad)
+                        spots_xy = np.column_stack([X_mm, Y_mm])
+
                     alignment_res = solve_laue_alignment(spots_xy, intensities=pk_int, config=align_cfg)
 
                 if alignment_res is not None:
@@ -408,7 +442,7 @@ class AstroLauePipeline:
             except Exception as e_align_fast:
                 logger.warning("高速アライメント計算中に警告: %s", e_align_fast)
 
-        # ステップ 8c: 【最優先高速実行】 ピーク飽和解析＆露光時間最適化
+        # ステップ 8c: 【最優先高速実行】 逆畳み込み結果を活用したピーク飽和解析＆露光時間最適化
         exposure_res: Optional[ExposureOptimizationResult] = None
         if cfg.optimize_exposure and slaue_raw is not None:
             try:
@@ -417,6 +451,8 @@ class AstroLauePipeline:
                     saturation_limit=cfg.saturation_limit,
                     target_ratio=cfg.target_exposure_ratio,
                     source_path=slaue_raw.file_path,
+                    polar_restored=polar_after,
+                    blur_length=blur_len,
                 )
                 logger.info(
                     "露光時間最適化解析完了: ステータス=%s, 観測Max=%.0f, 推定真Max=%.0f, 推奨比率=%.2f",
@@ -431,11 +467,9 @@ class AstroLauePipeline:
         # 速報コールバックの安全な実行 (アライメント & 露光最適化)
         if alignment_res is not None and on_alignment_ready is not None:
             try:
-                import inspect
-                sig = inspect.signature(on_alignment_ready)
-                if len(sig.parameters) >= 2:
+                try:
                     on_alignment_ready(alignment_res, exposure_res)
-                else:
+                except TypeError:
                     on_alignment_ready(alignment_res)
             except Exception as e_cb:
                 logger.warning("on_alignment_ready コールバック中に例外: %s", e_cb)

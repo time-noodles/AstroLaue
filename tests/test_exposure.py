@@ -225,3 +225,68 @@ def test_exposure_section_formatting_long_exposure_advice():
     sec_text = res.format_section()
     assert "推奨時間が10分を超えるため" in sec_text
     assert "段階的な延長" in sec_text
+
+
+def test_exposure_optimization_with_polar_restored():
+    """逆畳み込み後画像 (polar_restored) を利用した露光時間最適化の精度向上を検証."""
+    p = Path("share/1029-report/261028_224130_コメント1()_コメント2()_コメント3()_コメント4().CSV")
+    if not p.is_file():
+        pytest.skip("テスト対象CSVが存在しないためスキップ")
+
+    raw = load_slaue_csv(p)
+    pol_before = raw.to_normalized_polar()
+
+    # 模擬的な逆畳み込み先鋭化画像 (ピークが鋭く集光された極座標配列)
+    pol_restored = pol_before.copy()
+    pol_restored = pol_restored ** 1.5
+    pol_restored = pol_restored / pol_restored.max() * 2.5
+
+    res = analyze_exposure_and_optimize(
+        raw_data=raw,
+        saturation_limit=7.72e6,
+        target_ratio=0.80,
+        source_path=p,
+        polar_restored=pol_restored,
+        blur_length=5.0,
+    )
+
+    assert isinstance(res, ExposureOptimizationResult)
+    assert res.status == SaturationStatus.UNDER_EXPOSED
+    assert res.recommended_ratio > 1.0
+    assert res.recommended_seconds is not None
+    assert res.single_exposure_seconds == 13.0  # 13秒測定
+    assert res.recommended_single_seconds is not None
+    assert res.recommended_single_seconds > 13.0  # 延長推奨
+
+
+def test_pipeline_weak_exposure_fast_alignment():
+    """弱強度・短時間露光データに対するパイプラインの高速アライメント＆露光最適化速報を検証."""
+    p = Path("share/1029-report/261028_224130_コメント1()_コメント2()_コメント3()_コメント4().CSV")
+    if not p.is_file():
+        pytest.skip("テスト対象CSVが存在しないためスキップ")
+
+    fast_called = False
+    received_align = None
+    received_exp = None
+
+    def on_ready(align, exp=None):
+        nonlocal fast_called, received_align, received_exp
+        fast_called = True
+        received_align = align
+        received_exp = exp
+
+    cfg = PipelineConfig(
+        run_alignment=True,
+        optimize_exposure=True,
+        export_comparison=False,
+    )
+    pipeline = AstroLauePipeline(cfg)
+    res = pipeline.run(p, on_alignment_ready=on_ready)
+
+    assert fast_called is True
+    assert received_align is not None
+    assert received_align.best_candidate is not None
+    assert received_exp is not None
+    assert received_exp.status == SaturationStatus.UNDER_EXPOSED
+    assert res.alignment_result is not None
+    assert res.exposure_result is not None

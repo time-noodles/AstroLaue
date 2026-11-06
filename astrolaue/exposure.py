@@ -173,8 +173,13 @@ def analyze_exposure_and_optimize(
     saturation_limit: float = 7.72e6,
     target_ratio: float = 0.80,
     source_path: Optional[Union[str, Path]] = None,
+    polar_restored: Optional[np.ndarray] = None,
+    blur_length: Optional[float] = None,
 ) -> ExposureOptimizationResult:
-    """極座標生データからピーク飽和を解析し、最適測定時間を算定します.
+    """極座標生データおよび逆畳み込み結果からピーク飽和を解析し、最適測定時間を算定します.
+
+    逆畳み込み後画像 (polar_restored) が提供された場合、方位角ブラーによって平坦化・分散していた
+    微弱ピークを先鋭化・集光結果から高感度かつ精密に同定し、弱強度時でもロバストに最適露光時間を割り出します。
 
     ※注: 飽和マスク等のデータ欠損・黒塗り処理は一切適用しません。
     半径方向の未飽和スロープの曲率から真の最大強度を純粋な外挿演算で逆算します。
@@ -184,6 +189,8 @@ def analyze_exposure_and_optimize(
         saturation_limit: 検出器の飽和上限値 [counts] (デフォルト: 7,724,134 counts 付近)
         target_ratio: 目標とする飽和比率 (デフォルト: 0.80 = 上限の80%)
         source_path: CSV等のファイルパス (同一フォルダの .ASTS を自動探索するため)
+        polar_restored: 極座標逆畳み込み後画像 (先鋭化後配列) [任意]
+        blur_length: 推定ブラー長 L_theta [pix] (将来の先鋭化利得評価・方位角拡張用) [任意]
 
     Returns:
         ExposureOptimizationResult オブジェクト
@@ -202,20 +209,37 @@ def analyze_exposure_and_optimize(
     bg_val = float(np.median(p_data))
     target_max = float(saturation_limit * target_ratio)
 
-    # 1. 強いスポット候補のマルチピックアップ (maximum_filter による局所極大値検出)
-    # 周囲 (7x15) の中で極大であり、かつ有意に高いピークを全件抽出
+    # 1. スポット候補のマルチピックアップ (逆畳み込み結果の活用 & maximum_filter)
     filt = maximum_filter(p_data, size=(7, 15))
-    rel_thresh = bg_val + 0.50 * (float(p_data.max()) - bg_val)
-    peak_thresh = min(saturation_limit * 0.70, rel_thresh)
-    cand_mask = (p_data == filt) & (p_data >= peak_thresh)
-    cand_r_idx, cand_th_idx = np.where(cand_mask)
 
-    if len(cand_r_idx) == 0:
-        # フォールバック: 全体最大値の1点
-        r_max_idx, th_max_idx = np.unravel_index(np.argmax(p_data), p_data.shape)
-        candidates = [(r_max_idx, th_max_idx)]
-    else:
-        candidates = list(zip(cand_r_idx, cand_th_idx))
+    candidates = []
+    if polar_restored is not None and polar_restored.shape == p_data.shape:
+        # 逆畳み込み後のデータから高感度に真のスポット位置をスクリーニング
+        filt_res = maximum_filter(polar_restored, size=(7, 15))
+        med_res = float(np.median(polar_restored))
+        low_res = polar_restored[polar_restored < np.percentile(polar_restored, 70)]
+        std_res = float(np.std(low_res)) if len(low_res) > 0 else 0.01
+        thresh_res = max(med_res + 3.0 * std_res, 0.02)
+        mask_res = (polar_restored == filt_res) & (polar_restored > thresh_res)
+        res_r, res_th = np.where(mask_res)
+        if len(res_r) > 0:
+            # 逆畳み込み強度上位 50 候補
+            if len(res_r) > 50:
+                top_order = np.argsort(-polar_restored[res_r, res_th])[:50]
+                res_r, res_th = res_r[top_order], res_th[top_order]
+            candidates = list(zip(res_r, res_th))
+
+    if not candidates:
+        # 従来の生データ基準フォールバック (生データ上での相対閾値探索)
+        rel_thresh = bg_val + 0.30 * (float(p_data.max()) - bg_val)
+        peak_thresh = min(saturation_limit * 0.70, rel_thresh)
+        cand_mask = (p_data == filt) & (p_data >= peak_thresh)
+        cand_r_idx, cand_th_idx = np.where(cand_mask)
+        if len(cand_r_idx) > 0:
+            candidates = list(zip(cand_r_idx, cand_th_idx))
+        else:
+            r_max_idx, th_max_idx = np.unravel_index(np.argmax(p_data), p_data.shape)
+            candidates = [(r_max_idx, th_max_idx)]
 
     # 2. 【超高速スクリーニング】 半径方向の積分値 (Radial Integral) による真の最強ピーク選定
     # ピークトップが飽和で平坦化していても、半径方向の積分値 (面積) は真の総エネルギーに直接比例します
