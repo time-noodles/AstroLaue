@@ -115,6 +115,61 @@ def test_contrast_optimized_outer_ring_darkness(tmp_path):
     assert outer_median <= 10.0, f"外周リングが白濁しています: median={outer_median}"
 
 
+def test_contrast_optimized_and_linear_outer_transparency(tmp_path):
+    """コントラスト最適化画像および線形復元画像の円盤外縁（ふち）が白ではなく透明 (Alpha=0) であることを検証."""
+    from astrolaue.export import export_linear_image
+
+    out_sz = 200
+    norm_center = (100.0, 100.0)
+    norm_r0 = 15.0
+    norm_r_outer = 85.0
+
+    cart = np.zeros((out_sz, out_sz), dtype=np.float32)
+    # スポット配置
+    cart[100, 150] = 1.0
+
+    # 1. コントラスト最適化画像
+    opt_png = tmp_path / "opt_transparent.png"
+    export_contrast_optimized_image(
+        image=cart,
+        center=norm_center,
+        r_inner=norm_r0,
+        r_outer=norm_r_outer,
+        output_path=opt_png,
+        transparent_outer=True,
+    )
+
+    img_opt = cv2.imread(str(opt_png), cv2.IMREAD_UNCHANGED)
+    assert img_opt is not None
+    assert img_opt.shape == (out_sz, out_sz, 4)  # BGRA 透過PNG
+    # 四隅のコーナー (外縁のふち) は完全透明 (Alpha=0)
+    assert img_opt[0, 0, 3] == 0
+    assert img_opt[0, out_sz - 1, 3] == 0
+    assert img_opt[out_sz - 1, 0, 3] == 0
+    assert img_opt[out_sz - 1, out_sz - 1, 3] == 0
+    # 中心白丸は不透明白色 (Alpha=255, BGR=255)
+    assert img_opt[100, 100, 3] == 255
+    assert img_opt[100, 100, 0] == 255
+
+    # 2. 線形復元画像
+    lin_png = tmp_path / "lin_transparent.png"
+    export_linear_image(
+        image=cart,
+        center=norm_center,
+        r_inner=norm_r0,
+        r_outer=norm_r_outer,
+        output_path=lin_png,
+        transparent_outer=True,
+    )
+
+    img_lin = cv2.imread(str(lin_png), cv2.IMREAD_UNCHANGED)
+    assert img_lin is not None
+    assert img_lin.shape == (out_sz, out_sz, 4)  # BGRA 透過PNG
+    assert img_lin[0, 0, 3] == 0
+    assert img_lin[100, 100, 3] == 255
+    assert img_lin[100, 100, 0] == 255
+
+
 def test_pipeline_integration_with_radial_bg(tmp_path):
     """パイプライン実行時に動径背景減算と線形正規化が正常に統合動作することを検証."""
     csv_files = sorted(glob.glob("share/1029-report/*.CSV"))

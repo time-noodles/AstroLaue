@@ -575,14 +575,14 @@ class AstroLauePipeline:
             # 3並列比較図の生成 [元画像 | 線形復元 | コントラスト最適化]
             contrast_comparison_path = cfg.output_dir / "contrast_comparison.png"
             img_lin_read = (
-                cv2.imread(str(linear_png_path), cv2.IMREAD_GRAYSCALE)
+                cv2.imread(str(linear_png_path), cv2.IMREAD_UNCHANGED)
                 if linear_png_path and linear_png_path.exists()
                 else None
             )
             img_lin = img_lin_read if img_lin_read is not None else norm_img
 
             img_opt_read = (
-                cv2.imread(str(contrast_optimized_png_path), cv2.IMREAD_GRAYSCALE)
+                cv2.imread(str(contrast_optimized_png_path), cv2.IMREAD_UNCHANGED)
                 if contrast_optimized_png_path and contrast_optimized_png_path.exists()
                 else None
             )

@@ -352,11 +352,13 @@ def export_contrast_optimized_image(
     p_high_percentile: float = 99.8,
     outer_bg_value: float = 0.95,
     export_pseudo_color: bool = True,
+    transparent_outer: bool = True,
 ) -> Tuple[Path, Optional[Path]]:
-    """元画像形式 (中心白丸 + 有効円盤 + 余白背景) に準拠したコントラスト最適化画像を出力します.
+    """元画像形式 (中心白丸 + 有効円盤 + 外縁透過) に準拠したコントラスト最適化画像を出力します.
 
     Modified asinh トーンマッピングとロバスト・パーセンタイルクリッピングにより、
     主反射ピークの白飛び（飽和）を防ぎながら、微弱スポットや晶帯軸の連続線を目視で最も鮮明に識別できるように最適化します。
+    外縁のふちは白ではなく透明 (Alpha=0) として出力します。
 
     Args:
         image: 復元直交画像 (float32 [0.0, 1.0] または 2次元配列)
@@ -367,12 +369,13 @@ def export_contrast_optimized_image(
         asinh_beta: asinh の非線形圧縮強度 (大きいほど高輝度を強く圧縮し微弱光を強調)
         p_low_percentile: ブラックポイント（背景ノイズ足切り）のパーセンタイル
         p_high_percentile: ホワイトポイント（飽和保護）のパーセンタイル
-        outer_bg_value: 円盤外側の背景輝度 (GUIウィンドウ同等の薄灰色 0.95)
+        outer_bg_value: transparent_outer=False 時の円盤外側の背景輝度
         export_pseudo_color: Trueの場合、カラーマップ (Inferno) を適用した擬似カラー版も保存
+        transparent_outer: Trueの場合、円盤外側のふちを白ではなく透明 (Alpha=0) にする (デフォルト: True)
 
     Returns:
-        gray_path: グレースケール最適化画像の保存パス
-        pseudo_path: 擬似カラー画像の保存パス (作成時のみ)
+        gray_path: グレースケール最適化画像の保存パス (BGRA または Grayscale)
+        pseudo_path: 擬似カラー画像の保存パス (BGRA または BGR, 作成時のみ)
     """
     out_p = Path(output_path)
     out_p.parent.mkdir(parents=True, exist_ok=True)
@@ -404,14 +407,24 @@ def export_contrast_optimized_image(
     asinh_mapped = np.arcsinh(beta * scaled) / np.arcsinh(beta)
     asinh_mapped = np.clip(asinh_mapped, 0.0, 1.0)
 
-    # 元画像形式の合成: 有効円盤内 = 最適化輝度、外側 = outer_bg_value (0.95)、中心白丸 = 1.0 (白)
-    opt_canvas = asinh_mapped.copy()
-    opt_canvas[dists > r_outer] = outer_bg_value
-    opt_canvas[dists <= r_inner] = 1.0
+    # アルファマスク準備 (外縁のふちを透明化、中心白丸は不透明)
+    alpha = create_circular_mask((h, w), center, r_inner, r_outer, feather_pix=1.5, mask_inner_hole=False)
+    alpha_u8 = (alpha * 255.0).astype(np.uint8)
 
-    gray_u8 = (np.clip(opt_canvas, 0.0, 1.0) * 255.0).astype(np.uint8)
-    safe_imwrite(out_p, gray_u8)
-    logger.info("コントラスト最適化グレースケール画像を保存しました: %s", out_p)
+    if transparent_outer:
+        gray_val = (np.clip(asinh_mapped, 0.0, 1.0) * 255.0).astype(np.uint8)
+        gray_val[dists <= r_inner] = 255
+        # 外縁透過 BGRA 形式
+        bgra = cv2.merge([gray_val, gray_val, gray_val, alpha_u8])
+        safe_imwrite(out_p, bgra)
+    else:
+        opt_canvas = asinh_mapped.copy()
+        opt_canvas[dists > r_outer] = outer_bg_value
+        opt_canvas[dists <= r_inner] = 1.0
+        gray_u8 = (np.clip(opt_canvas, 0.0, 1.0) * 255.0).astype(np.uint8)
+        safe_imwrite(out_p, gray_u8)
+
+    logger.info("コントラスト最適化画像を保存しました (外縁透明=%s): %s", transparent_outer, out_p)
 
     pseudo_path = None
     if export_pseudo_color:
@@ -423,12 +436,17 @@ def export_contrast_optimized_image(
             cmap = plt.get_cmap("inferno")
         # 円盤内のみカラーマップ適用
         rgba = cmap(asinh_mapped)[..., :3]  # RGB [0, 1]
-        rgba[dists > r_outer] = outer_bg_value
-        rgba[dists <= r_inner] = 1.0
-
         bgr_u8 = (np.clip(rgba[..., ::-1], 0.0, 1.0) * 255.0).astype(np.uint8)
+        bgr_u8[dists <= r_inner] = [255, 255, 255]
+
         pseudo_path = out_p.with_name(f"{out_p.stem}_pseudo.png")
-        safe_imwrite(pseudo_path, bgr_u8)
+        if transparent_outer:
+            bgra_pseudo = cv2.merge([bgr_u8[..., 0], bgr_u8[..., 1], bgr_u8[..., 2], alpha_u8])
+            safe_imwrite(pseudo_path, bgra_pseudo)
+        else:
+            bgr_u8[dists > r_outer] = int(round(outer_bg_value * 255.0))
+            safe_imwrite(pseudo_path, bgr_u8)
+
         logger.info("コントラスト最適化擬似カラー画像を保存しました: %s", pseudo_path)
 
     return out_p, pseudo_path
@@ -441,8 +459,9 @@ def export_linear_image(
     r_outer: float,
     output_path: str | Path,
     outer_bg_value: float = 0.95,
+    transparent_outer: bool = True,
 ) -> Path:
-    """元画像形式 (中心白丸 + 有効円盤 + 余白背景) に準拠した線形 (リニア) 復元画像を出力します.
+    """元画像形式 (中心白丸 + 有効円盤 + 外縁透過) に準拠した線形 (リニア) 復元画像を出力します.
 
     Args:
         image: 復元直交画像 (float32 [0.0, 1.0])
@@ -450,7 +469,8 @@ def export_linear_image(
         r_inner: 中心ビームストッパー白丸の半径
         r_outer: 有効回折円盤の半径
         output_path: 保存先ファイルパス (例: restored_linear.png)
-        outer_bg_value: 余白背景の輝度
+        outer_bg_value: transparent_outer=False 時の余白背景の輝度
+        transparent_outer: Trueの場合、円盤外側のふちを白ではなく透明 (Alpha=0) にする (デフォルト: True)
 
     Returns:
         output_path: 保存先ファイルパス
@@ -470,13 +490,21 @@ def export_linear_image(
     d_max = float(img_f[disk_mask].max()) if np.any(disk_mask) else 1.0
     norm_linear = np.clip(img_f / max(d_max, 1e-4), 0.0, 1.0)
 
-    canvas = norm_linear.copy()
-    canvas[dists > r_outer] = outer_bg_value
-    canvas[dists <= r_inner] = 1.0
+    if transparent_outer:
+        alpha = create_circular_mask((h, w), center, r_inner, r_outer, feather_pix=1.5, mask_inner_hole=False)
+        alpha_u8 = (alpha * 255.0).astype(np.uint8)
+        gray_val = (norm_linear * 255.0).astype(np.uint8)
+        gray_val[dists <= r_inner] = 255
+        bgra = cv2.merge([gray_val, gray_val, gray_val, alpha_u8])
+        safe_imwrite(out_p, bgra)
+    else:
+        canvas = norm_linear.copy()
+        canvas[dists > r_outer] = outer_bg_value
+        canvas[dists <= r_inner] = 1.0
+        gray_u8 = (canvas * 255.0).astype(np.uint8)
+        safe_imwrite(out_p, gray_u8)
 
-    gray_u8 = (canvas * 255.0).astype(np.uint8)
-    safe_imwrite(out_p, gray_u8)
-    logger.info("元画像準拠線形復元画像を保存しました: %s", out_p)
+    logger.info("元画像準拠線形復元画像を保存しました (外縁透明=%s): %s", transparent_outer, out_p)
     return out_p
 
 
@@ -520,7 +548,9 @@ def export_three_way_comparison(
         img_show = imgs[i]
         if img_show is None:
             img_show = original_image
-        if len(img_show.shape) == 3:
+        if len(img_show.shape) == 3 and img_show.shape[2] == 4:
+            ax.imshow(cv2.cvtColor(img_show, cv2.COLOR_BGRA2RGBA))
+        elif len(img_show.shape) == 3:
             ax.imshow(cv2.cvtColor(img_show, cv2.COLOR_BGR2RGB))
         else:
             ax.imshow(img_show, cmap="gray", vmin=0, vmax=255 if img_show.dtype == np.uint8 else 1.0)
